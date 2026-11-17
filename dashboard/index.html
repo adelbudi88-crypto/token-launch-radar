@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Radar — which pre-token protocol is worth farming next</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">◉</span>
+      <div>
+        <h1>Token Radar</h1>
+        <p class="tag">Which pre-token protocol is worth farming next — and what to do about it.</p>
+      </div>
+    </div>
+    <div class="meta">
+      <div><span class="k">Snapshot</span><span id="asof" class="v">—</span></div>
+      <div><span class="k">Source</span><span class="v">DefiLlama protocols</span></div>
+      <div><span class="k">Model</span><span class="v" id="modelver">—</span></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="stats" id="stats" aria-label="Board summary"></section>
+
+  <section class="formulastrip">
+    <span class="formula">implied value = TVL × <b>peer multiple</b> × <b>growth</b> × <b>maturity</b> × <b>chains</b></span>
+    <span class="muted">A launch is priced off the live-token protocols in its own category — the peer table and the full model are below the board.</span>
+  </section>
+
+  <section class="controls">
+    <div class="tabs" role="tablist">
+      <button id="tab-board" class="tab active" data-view="board" role="tab">Board · pre-token</button>
+      <button id="tab-live" class="tab" data-view="live" role="tab">Live tokens · market values</button>
+    </div>
+    <div class="filters">
+      <input id="q" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
+      <select id="chain" aria-label="Filter by chain"><option value="">All chains</option></select>
+      <select id="cat" aria-label="Filter by category"><option value="">All categories</option></select>
+      <label class="chk"><input type="checkbox" id="watchonly"> Watchlist only</label>
+    </div>
+  </section>
+
+  <section class="card tablecard">
+    <div class="tablehead">
+      <h2 id="tabletitle">Ranked board</h2>
+      <span id="rowcount" class="muted"></span>
+    </div>
+    <div class="scroll">
+      <table class="board" id="board">
+        <thead>
+          <tr>
+            <th data-sort="rank" class="num sorted">#</th>
+            <th data-sort="name">Protocol</th>
+            <th data-sort="tvl_usd" class="num">TVL</th>
+            <th data-sort="change_7d" class="num">7d</th>
+            <th data-sort="age_days" class="num">Age</th>
+            <th data-sort="multiple" class="num">Multiple</th>
+            <th data-sort="implied_value_usd" class="num">Implied value</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <table class="board hidden" id="livetable">
+        <thead>
+          <tr>
+            <th class="num">#</th><th>Protocol</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">mcap / TVL</th><th class="num">7d</th>
+          </tr>
+        </thead>
+        <tbody id="liverows"></tbody>
+      </table>
+    </div>
+    <p class="hint">Click a row for the detail view: the model arithmetic and the farm plan. Click a column header to sort.</p>
+  </section>
+
+  <section class="card model">
+    <div class="card-h">
+      <h2>How a launch is priced</h2>
+      <span class="pill">derived from the snapshot, not a list of names</span>
+    </div>
+    <p class="formula">implied value = TVL × <b>peer multiple</b> × <b>growth</b> × <b>maturity</b> × <b>chains</b></p>
+    <p class="explain">A launch is worth what the market already pays for the same kind of protocol: the <b>peer multiple</b> is the median market-cap / TVL of the live-token protocols in the same category, shrunk toward the global median when fewer than 3 peers price it, clamped to 0.05–1.50. <b>Growth</b> is the 7-day TVL change, clamped to −80…+200%, weighted 0.7. <b>Maturity</b> is 0.70–1.00 over 4 years tracked with no token (unknown age counts as 365 days). <b>Chains</b> adds 3% per extra chain, up to +12%. Every row above shows its own multiple and multipliers; the detail view shows the arithmetic.</p>
+    <div class="peers">
+      <h3>Peer multiples by category <span class="muted">(live-token protocols only)</span></h3>
+      <table class="peertable">
+        <thead><tr><th>Category</th><th class="num">Peers</th><th class="num">Median mcap / TVL</th><th class="num">Multiple used</th></tr></thead>
+        <tbody id="peers"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p><b>A note on the record.</b> A protocol on this board <i>records</i> no token in DefiLlama's data — that is not proof it has none. Implied values are this radar's own claim, never make.fun's, and never a prediction that a token will be issued or when. Farm steps are a plan, not financial advice; verify every link on the protocol's own site before you sign anything.</p>
+    <p class="muted" id="footline">—</p>
+  </footer>
+</main>
+
+<aside class="drawer hidden" id="drawer" aria-label="Protocol detail">
+  <div class="scrim" id="scrim"></div>
+  <div class="panel">
+    <button class="close" id="close" aria-label="Close detail">✕</button>
+    <div id="detail"></div>
+  </div>
+</aside>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

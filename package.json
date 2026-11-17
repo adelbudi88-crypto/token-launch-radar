@@ -1,0 +1,10 @@
+{
+  "name": "token-radar-01",
+  "version": "1.0.0",
+  "description": "Token Launch Radar — ranks pre-token DeFi protocols by implied launch value, each with a farm plan.",
+  "type": "module",
+  "license": "MIT",
+  "dependencies": {
+    "playwright": "^1.65.1"
+  }
+}
