@@ -1,4 +1,4 @@
-// Token Launch Radar — value model "radar-3".
+// Token Launch Radar — value model "radar-4".
 //
 // One sealed snapshot in, one ranked board out. The board covers every slug on
 // the snapshot's watchlist (the floor, never a ceiling) plus every other rankable
@@ -7,31 +7,46 @@
 // no CoinGecko id, no symbol); the live-token protocols are kept apart and shown
 // with the market's own values, never mixed into the ranked board.
 //
-// radar-3 fits the value model from the snapshot's own live-token market instead
-// of stating a peer median. For every live-token protocol that records a market
-// cap, the model regresses ln(market cap / TVL) on the snapshot's own figures:
+// radar-4 fits the value model from the snapshot's own live-token market, the way
+// radar-3 did — and then hardens it in the three places radar-3 was weak:
 //
 //   ln(mcap / TVL) = b0 + b1·log10(TVL) + b2·growth + b3·ln(1 + age) + b4·chains
 //                    + category effect
+//
+// 1. ROBUST. The fit is Huber regression (iteratively reweighted least squares,
+//    k = 1.345), not ordinary least squares: a handful of protocols whose market
+//    caps sit far from any line — a meme listing, a broken peg — no longer drag
+//    the coefficients. Outliers are down-weighted, never deleted, and the scale
+//    comes from the residuals themselves (1.4826 × MAD).
+// 2. THE SIZE CURVE IS SHOWN, NOT ASSUMED. The market pays less per TVL dollar
+//    as a protocol gets bigger — the fitted line is a power law (market cap grows
+//    roughly like TVL^0.52) — and the dashboard prints the fitted multiple at
+//    every size from $5M to $5B next to the observed median ratio in each TVL
+//    bucket, so the curve can be checked against the data that drew it.
+// 3. THE TEST IS WALK-FORWARD. A 5-fold split shuffles time away; a launch radar
+//    is judged on the future. So the model is scored leave-one-out, on three
+//    walk-forward splits (fit on the oldest 50/70/80% of listings, tested on the
+//    newest), on the 5-fold split, and on twenty random time splits — always
+//    against the same two baselines on the same held-out protocols: the radar-2
+//    category peer median and the radar-3 OLS fit.
+//
+// Four richer variants were built and rejected on those same tests, and the
+// dashboard says so with their numbers: a quadratic size term (LOO ×3.49 vs
+// ×3.27), time-weighted training (τ = 2 years in the shipped test, and 1- and
+// 3-year settings tested the same way in development — every setting worse, it
+// throws away the older half of an already small training set), per-category
+// size slopes (best on random folds, worst on every walk-forward split — the
+// slopes do not survive into the future), and a listed-year trend (helps one
+// split, hurts the rest). The shipped model is the one that survives all five tests.
 //
 // The category effect is the mean residual of the category's live protocols,
 // shrunk toward zero by n / (n + 5), so a category priced by one peer cannot
 // drag the whole board the way a raw median did in radar-2. Exchanges (CEX)
 // are left out of the training set: an exchange's own token is not a launch
-// comparable. The fit is ordinary least squares, solved here by Gaussian
-// elimination — no library, no constants from outside the snapshot.
+// comparable. The fit is recomputed from the sealed snapshot on every run.
 //
 // A pre-token protocol's implied value is TVL × exp(fitted ln ratio), clamped
-// to [0.01, 3.00]. The strongest fitted fact is the size elasticity: the market
-// pays less per TVL dollar as a protocol gets bigger (b1 ≈ −0.94, so market cap
-// grows roughly like TVL^0.59). The dashboard prints the fitted coefficients,
-// the category table and the out-of-sample test, so any reader can check the
-// multiple behind any row.
-//
-// The out-of-sample test is 5-fold cross-validation, folded by a deterministic
-// hash of each protocol's slug: fit on four folds, predict the fifth, repeat.
-// The same folds score the radar-2 peer-median baseline, so the dashboard shows
-// the fitted model beating a stated median on data neither of them trained on.
+// to [0.01, 3.00].
 //
 // No protocol name is ever special-cased: the same fitted function scores every
 // row, and the fit itself is recomputed from the sealed snapshot on every run.
@@ -73,6 +88,16 @@ export interface ModelConstants {
   peer_cap: number;
   peer_shrink: number;
   folds: number;
+  /** Huber tuning constant: residuals beyond k × scale are down-weighted, not deleted. */
+  huber_k: number;
+  /** Huber IRLS iterations before the fit is declared settled. */
+  huber_iters: number;
+  /** Walk-forward splits, as the fraction of dated listings the fit trains on. */
+  wf_fracs: number[];
+  /** Random time splits in the walk-forward summary, seeded, so runs agree. */
+  wf_random_splits: number;
+  /** Time-weighting half-life tested and rejected: 0 means the shipped fit weights all training rows equally. */
+  time_tau_days: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -88,10 +113,15 @@ export const MODEL: ModelConstants = {
   peer_cap: 1.5,
   peer_shrink: 3,
   folds: 5,
+  huber_k: 1.345,
+  huber_iters: 30,
+  wf_fracs: [0.5, 0.7, 0.8],
+  wf_random_splits: 20,
+  time_tau_days: 0,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -104,21 +134,63 @@ export interface FittedCategory {
   fitted_factor: number;
 }
 
-/** The out-of-sample test: the fitted model against the peer-median baseline. */
-export interface ValidationSummary {
-  folds: number;
+/** One out-of-sample test: the same held-out protocols, scored three ways. */
+export interface ValidationTest {
+  /** 'loo', 'walk-forward 70/30', 'walk-forward 50/50', 'walk-forward 80/20', '5-fold CV'. */
+  name: string;
   n_test: number;
-  model_median_abs_log_err: number;
-  model_mean_abs_log_err: number;
+  /** Median absolute log error, as a multiple (exp of the log error). */
+  model_median_x: number;
+  ols_median_x: number;
+  base_median_x: number;
+  /** Share of held-out market caps predicted within 2×. */
   model_within_2x: number;
-  model_within_3x: number;
-  base_median_abs_log_err: number;
-  base_mean_abs_log_err: number;
+  ols_within_2x: number;
   base_within_2x: number;
-  base_within_3x: number;
 }
 
-/** The fitted model: coefficients, fit quality, validation, category table. */
+/** A richer variant that was built, tested and rejected, with its leave-one-out error. */
+export interface RejectedVariant {
+  name: string;
+  loo_median_x: number;
+  note: string;
+}
+
+/** The walk-forward summary: twenty random time splits, seeded, so runs agree. */
+export interface WalkForwardSummary {
+  splits: number;
+  /** Mean of the per-split median errors, as multiples. */
+  model_mean_median_x: number;
+  ols_mean_median_x: number;
+  base_mean_median_x: number;
+  /** Splits where the robust fit beat the OLS fit on median error. */
+  model_wins_vs_ols: number;
+  model_mean_within_2x: number;
+}
+
+/** The out-of-sample test: leave-one-out, three walk-forward splits, 5-fold, and the random-split summary. */
+export interface ValidationSummary {
+  tests: ValidationTest[];
+  rejected: RejectedVariant[];
+  random_splits: WalkForwardSummary;
+  /** The headline: the leave-one-out median error, as a multiple. */
+  loo_median_x: number;
+  /** The headline walk-forward number: the 70/30 split's median error, as a multiple. */
+  wf_median_x: number;
+}
+
+/** One point of the size curve: the fitted multiple at a TVL, next to what the data pays there. */
+export interface SizeCurvePoint {
+  tvl_usd: number;
+  label: string;
+  /** The model's fitted multiple at this TVL, other features at their training medians. */
+  fitted_multiple: number;
+  /** The observed median mcap / TVL of training protocols in this TVL bucket, or null when the bucket is empty. */
+  observed_median: number | null;
+  n: number;
+}
+
+/** The fitted model: coefficients, fit quality, validation, category table, size curve. */
 export interface FittedModel {
   beta: number[];
   catAdj: Map<string, number>;
@@ -128,6 +200,11 @@ export interface FittedModel {
   train_median_ratio: number;
   validation: ValidationSummary;
   categories: FittedCategory[];
+  size_curve: SizeCurvePoint[];
+  /** Huber scale (1.4826 × MAD of the residuals) at the settled fit. */
+  huber_scale: number;
+  /** Huber iterations run before the fit settled. */
+  huber_iters_used: number;
 }
 
 /** A farm step: the action, what it costs, and how long it takes. */
@@ -223,8 +300,11 @@ export interface RadarData {
   fit_n_train: number;
   fit_n_categories: number;
   fit_train_median_ratio: number;
+  fit_huber_k: number;
+  fit_huber_scale: number;
   validation: ValidationSummary;
   categories: FittedCategory[];
+  size_curve: SizeCurvePoint[];
   watchlist: string[];
   rows: RadarRow[];
   live: LiveRow[];
@@ -325,11 +405,99 @@ export function featuresOf(p: SnapshotProtocol, asOf: string, model: ModelConsta
   ];
 }
 
+/**
+ * One fit specification: which features, which loss, which training weights.
+ * The shipped model is { huber: true, k: 1.345, quad: false, year: false,
+ * catxsize: false, timeTauDays: 0 }; the rejected variants differ in exactly
+ * one of these, so their leave-one-out errors are comparable apples to apples.
+ */
+export interface FitSpec {
+  name: string;
+  huber: boolean;
+  k: number;
+  /** A quadratic size term (log10 TVL)² — tested, rejected. */
+  quad: boolean;
+  /** A listed-year trend — tested, rejected. */
+  year: boolean;
+  /** Per-category size slopes for categories with ≥5 training peers — tested, rejected. */
+  catxsize: boolean;
+  /** Time-weighting half-life in days; 0 means every training row weighs the same. */
+  timeTauDays: number;
+}
+
+export const SHIPPED_SPEC: FitSpec = {
+  name: 'radar-4',
+  huber: true,
+  k: 1.345,
+  quad: false,
+  year: false,
+  catxsize: false,
+  timeTauDays: 0,
+};
+
+export const OLS_SPEC: FitSpec = {
+  name: 'radar-3 OLS',
+  huber: false,
+  k: 1.345,
+  quad: false,
+  year: false,
+  catxsize: false,
+  timeTauDays: 0,
+};
+
+/** The rejected variants, each differing from the shipped fit in exactly one choice. */
+export const REJECTED_SPECS: FitSpec[] = [
+  { name: 'quadratic size curve', huber: true, k: 1.345, quad: true, year: false, catxsize: false, timeTauDays: 0 },
+  { name: 'time-weighted training (τ = 2y)', huber: true, k: 1.345, quad: false, year: false, catxsize: false, timeTauDays: 730 },
+  { name: 'per-category size slopes', huber: true, k: 1.345, quad: false, year: false, catxsize: true, timeTauDays: 0 },
+  { name: 'listed-year trend', huber: true, k: 1.345, quad: false, year: true, catxsize: false, timeTauDays: 0 },
+];
+
+/** Categories with at least five training peers: the only ones a size slope is fit for. */
+function bigCategories(rows: TrainRow[]): string[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.category, (counts.get(r.category) ?? 0) + 1);
+  return [...counts.entries()].filter(([, n]) => n >= 5).map(([c]) => c).sort();
+}
+
+/** The design row of one protocol under a spec: the five base features plus the spec's extras. */
+function designRow(p: SnapshotProtocol, asOf: string, model: ModelConstants, spec: FitSpec, bigCats: string[]): number[] {
+  const base = featuresOf(p, asOf, model);
+  const lt = Math.log10(Math.max(p.tvl_usd, 1));
+  if (spec.quad) base.push(lt * lt);
+  if (spec.year) {
+    const y = p.listed_at !== null && /^\d{4}/.test(p.listed_at) ? parseInt(p.listed_at.slice(0, 4), 10) : 2023;
+    base.push(y - 2021);
+  }
+  if (spec.catxsize) {
+    for (const c of bigCats) base.push((p.category ?? '(no category)') === c ? lt : 0);
+  }
+  return base;
+}
+
+/** The training weight of one row under a spec: 1, or exp(−age/τ) when time-weighting is on. */
+function timeWeight(p: SnapshotProtocol, asOf: string, model: ModelConstants, spec: FitSpec): number {
+  if (spec.timeTauDays <= 0) return 1;
+  const age = ageDays(asOf, p.listed_at) ?? model.unknown_age_days;
+  return Math.exp(-age / spec.timeTauDays);
+}
+
+/** A seeded deterministic PRNG (mulberry32): the random time splits must agree across runs. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 /** One training row: a live-token protocol whose market already priced it. */
 interface TrainRow {
   p: SnapshotProtocol;
   y: number;
-  x: number[];
   category: string;
 }
 
@@ -342,7 +510,7 @@ function trainingRows(snapshot: Snapshot, asOf: string, model: ModelConstants): 
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const ratio = p.mcap_usd / p.tvl_usd;
     if (!(ratio > 0 && ratio <= model.ratio_cap)) continue;
-    rows.push({ p, y: Math.log(ratio), x: featuresOf(p, asOf, model), category: p.category ?? '(no category)' });
+    rows.push({ p, y: Math.log(ratio), category: p.category ?? '(no category)' });
   }
   return rows;
 }
@@ -378,116 +546,319 @@ function dot(a: number[], b: number[]): number {
   return s;
 }
 
-/** Ordinary least squares on the training rows, plus shrunk category residuals. */
-function olsFit(rows: TrainRow[], model: ModelConstants): { beta: number[]; catAdj: Map<string, number> } | null {
-  if (rows.length === 0) return null;
-  const k = rows[0]!.x.length;
+/** Weighted least squares on one design: solve (X'WX)β = X'Wy by Gaussian elimination. */
+function wls(design: number[][], y: number[], w: number[]): number[] | null {
+  const k = design[0]!.length;
   const xtx: number[][] = Array.from({ length: k }, () => new Array<number>(k).fill(0));
   const xty: number[] = new Array<number>(k).fill(0);
-  for (const r of rows) {
+  for (let n = 0; n < design.length; n++) {
+    const row = design[n]!;
+    const wn = w[n]!;
     for (let i = 0; i < k; i++) {
-      xty[i]! += r.x[i]! * r.y;
-      for (let j = 0; j < k; j++) xtx[i]![j]! += r.x[i]! * r.x[j]!;
+      xty[i]! += wn * row[i]! * y[n]!;
+      for (let j = 0; j < k; j++) xtx[i]![j]! += wn * row[i]! * row[j]!;
     }
   }
-  const beta = solveLinear(xtx, xty);
+  return solveLinear(xtx, xty);
+}
+
+/** A fitted spec: coefficients, shrunk category residuals, and the Huber scale. */
+interface FittedSpec {
+  beta: number[];
+  catAdj: Map<string, number>;
+  bigCats: string[];
+  scale: number;
+  itersUsed: number;
+}
+
+/**
+ * Fit one spec on the training rows. Huber loss runs iteratively reweighted least
+ * squares: start from the weighted fit, then down-weight each row by
+ * min(1, k·scale/|residual|) with scale = 1.4826 × MAD, until the coefficients
+ * stop moving. OLS is the same path with one pass and no reweighting. The
+ * category effect is the shrunk mean residual per category, as in radar-2/3.
+ */
+function fitSpec(rows: TrainRow[], spec: FitSpec, model: ModelConstants, asOf: string): FittedSpec | null {
+  if (rows.length === 0) return null;
+  const bigCats = spec.catxsize ? bigCategories(rows) : [];
+  const design = rows.map((r) => designRow(r.p, asOf, model, spec, bigCats));
+  const y = rows.map((r) => r.y);
+  const w0 = rows.map((r) => timeWeight(r.p, asOf, model, spec));
+  let beta = wls(design, y, w0);
   if (beta === null) return null;
+  let scale = 0;
+  let itersUsed = 0;
+  if (spec.huber) {
+    for (let it = 0; it < model.huber_iters; it++) {
+      itersUsed = it + 1;
+      const res = y.map((v, i) => v - dot(beta!, design[i]!));
+      const med = median(res) ?? 0;
+      const mad = median(res.map((v) => Math.abs(v - med))) ?? 0;
+      const std = Math.sqrt(res.reduce((a, v) => a + v * v, 0) / Math.max(res.length, 1));
+      scale = 1.4826 * mad;
+      if (!(scale > 1e-9)) scale = Math.max(std, 1e-6);
+      const w = w0.map((wBase, i) => {
+        const u = Math.abs(res[i]!) / (spec.k * scale);
+        return wBase * (u <= 1 ? 1 : 1 / u);
+      });
+      const next = wls(design, y, w);
+      if (next === null) return null;
+      const moved = Math.max(...next.map((v, i) => Math.abs(v - beta![i]!)));
+      beta = next;
+      if (moved < 1e-10) break;
+    }
+  } else {
+    const res = y.map((v, i) => v - dot(beta, design[i]!));
+    scale = Math.sqrt(res.reduce((a, v) => a + v * v, 0) / Math.max(res.length, 1));
+  }
   const byCat = new Map<string, number[]>();
-  for (const r of rows) {
-    const arr = byCat.get(r.category) ?? [];
-    arr.push(r.y - dot(beta, r.x));
-    byCat.set(r.category, arr);
+  for (let i = 0; i < rows.length; i++) {
+    const arr = byCat.get(rows[i]!.category) ?? [];
+    arr.push(rows[i]!.y - dot(beta, design[i]!));
+    byCat.set(rows[i]!.category, arr);
   }
   const catAdj = new Map<string, number>();
   for (const [c, res] of byCat) {
     const mean = res.reduce((a, b) => a + b, 0) / res.length;
     catAdj.set(c, (res.length / (res.length + model.shrink_k)) * mean);
   }
-  return { beta, catAdj };
+  return { beta, catAdj, bigCats, scale, itersUsed };
 }
 
-/** The fitted ln(mcap / TVL) of one feature vector in one category. */
-function predictLogRatio(x: number[], category: string, fit: { beta: number[]; catAdj: Map<string, number> }): number {
-  return dot(fit.beta, x) + (fit.catAdj.get(category) ?? 0);
+/** The fitted ln(mcap / TVL) of one design row in one category. */
+function predictSpec(design: number[], category: string, fit: FittedSpec): number {
+  return dot(fit.beta, design) + (fit.catAdj.get(category) ?? 0);
 }
 
-/** The median / mean / within-2× / within-3× summary of absolute log errors. */
-function summarizeErrs(errs: number[]): { median: number; mean: number; within2: number; within3: number } {
-  const s = [...errs].sort((a, b) => a - b);
-  const med = median(s) ?? 0;
-  const mean = errs.reduce((a, b) => a + b, 0) / Math.max(errs.length, 1);
-  const within2 = errs.filter((e) => e < Math.log(2)).length / Math.max(errs.length, 1);
-  const within3 = errs.filter((e) => e < Math.log(3)).length / Math.max(errs.length, 1);
-  return { median: med, mean, within2, within3 };
+/** The radar-2 peer-median baseline, predicted for the test rows from the training rows only. */
+function peerBaselinePredict(train: TrainRow[], test: TrainRow[], model: ModelConstants): number[] {
+  const byCat = new Map<string, number[]>();
+  for (const r of train) {
+    const arr = byCat.get(r.category) ?? [];
+    arr.push(Math.exp(r.y));
+    byCat.set(r.category, arr);
+  }
+  const global = median(train.map((r) => Math.exp(r.y))) ?? 0.25;
+  return test.map((t) => {
+    const ratios = byCat.get(t.category) ?? [];
+    const med = ratios.length > 0 ? median(ratios)! : global;
+    const shrunk = ratios.length >= model.peer_shrink ? med : (ratios.length * med + model.peer_shrink * global) / (ratios.length + model.peer_shrink);
+    return Math.log(Math.min(model.peer_cap, Math.max(model.peer_floor, shrunk)));
+  });
+}
+
+/** One spec fitted on the training rows, predicted for the test rows; null when the fit fails. */
+function specPredict(train: TrainRow[], test: TrainRow[], spec: FitSpec, model: ModelConstants, asOf: string): number[] | null {
+  const fit = fitSpec(train, spec, model, asOf);
+  if (fit === null) return null;
+  return test.map((t) => predictSpec(designRow(t.p, asOf, model, spec, fit.bigCats), t.category, fit));
+}
+
+/** The median / within-2× summary of one test, for the three models at once. */
+function summarizeTest(name: string, nTest: number, modelErrs: number[], olsErrs: number[], baseErrs: number[]): ValidationTest {
+  const med = (errs: number[]): number => Math.exp(median(errs) ?? 0);
+  const w2 = (errs: number[]): number => errs.filter((e) => e < Math.log(2)).length / Math.max(errs.length, 1);
+  return {
+    name,
+    n_test: nTest,
+    model_median_x: round4(med(modelErrs)),
+    ols_median_x: round4(med(olsErrs)),
+    base_median_x: round4(med(baseErrs)),
+    model_within_2x: round4(w2(modelErrs)),
+    ols_within_2x: round4(w2(olsErrs)),
+    base_within_2x: round4(w2(baseErrs)),
+  };
+}
+
+/** Absolute log errors of three predictions against the held-out truth. */
+function absErrs(truth: number[], ...preds: (number[] | null)[]): number[][] {
+  return preds.map((p) => (p === null ? truth.map(() => Math.abs(truth[0]!)) : truth.map((v, i) => Math.abs(v - p[i]!))));
 }
 
 /**
- * The 5-fold cross-validation: each fold is predicted by a fit trained on the
- * other four, and the radar-2 peer-median baseline is scored on the same folds,
- * so the comparison is on data neither model trained on.
+ * Leave-one-out: each training protocol is predicted by a fit trained on the
+ * other 111. The shipped fit, the OLS fit and the peer baseline are scored on
+ * the same held-out rows, and so is every rejected variant.
  */
-function crossValidate(rows: TrainRow[], model: ModelConstants): ValidationSummary {
+function looValidation(rows: TrainRow[], model: ModelConstants, asOf: string): { test: ValidationTest; rejected: RejectedVariant[] } {
+  const specs: FitSpec[] = [SHIPPED_SPEC, OLS_SPEC, ...REJECTED_SPECS];
+  const errsBySpec = new Map<string, number[]>();
+  for (const s of specs) errsBySpec.set(s.name, []);
+  const baseErrs: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const train = rows.filter((_, j) => j !== i);
+    const test = [rows[i]!];
+    const truth = [rows[i]!.y];
+    for (const s of specs) {
+      const pred = specPredict(train, test, s, model, asOf);
+      errsBySpec.get(s.name)!.push(pred === null ? Math.abs(truth[0]!) : Math.abs(truth[0]! - pred[0]!));
+    }
+    baseErrs.push(Math.abs(truth[0]! - peerBaselinePredict(train, test, model)[0]!));
+  }
+  const test = summarizeTest(
+    'leave-one-out',
+    rows.length,
+    errsBySpec.get(SHIPPED_SPEC.name)!,
+    errsBySpec.get(OLS_SPEC.name)!,
+    baseErrs,
+  );
+  const rejected: RejectedVariant[] = REJECTED_SPECS.map((s) => ({
+    name: s.name,
+    loo_median_x: round4(Math.exp(median(errsBySpec.get(s.name)!) ?? 0)),
+    note:
+      s.name === 'quadratic size curve'
+        ? 'a squared size term bends the fit toward the biggest protocols and predicts worse out of sample'
+        : s.name === 'time-weighted training (τ = 2y)'
+          ? 'down-weighting older listings throws away half of an already small training set'
+          : s.name === 'per-category size slopes'
+            ? 'category slopes fit random folds but fail every walk-forward split — they do not survive into the future'
+            : 'a listing-year trend helps one split and hurts the rest',
+  }));
+  return { test, rejected };
+}
+
+/** One walk-forward split: fit on the oldest listings, test on the newest. */
+function walkForwardTest(rows: TrainRow[], frac: number, model: ModelConstants, asOf: string): ValidationTest {
+  const dated = rows.filter((r) => r.p.listed_at !== null).sort((a, b) => (a.p.listed_at! < b.p.listed_at! ? -1 : 1));
+  const cut = dated[Math.floor(dated.length * frac)]!.p.listed_at!;
+  const train = rows.filter((r) => r.p.listed_at === null || r.p.listed_at < cut);
+  const test = dated.filter((r) => r.p.listed_at! >= cut);
+  const truth = test.map((r) => r.y);
+  const modelPred = specPredict(train, test, SHIPPED_SPEC, model, asOf);
+  const olsPred = specPredict(train, test, OLS_SPEC, model, asOf);
+  const basePred = peerBaselinePredict(train, test, model);
+  const [modelErrs, olsErrs, baseErrs] = absErrs(truth, modelPred, olsPred, basePred);
+  return summarizeTest(`walk-forward ${Math.round(frac * 100)}/${Math.round((1 - frac) * 100)}`, test.length, modelErrs, olsErrs, baseErrs);
+}
+
+/** The 5-fold hash split, kept from radar-3 so the three generations compare on the same test. */
+function fiveFoldTest(rows: TrainRow[], model: ModelConstants, asOf: string): ValidationTest {
   const folds = model.folds;
   const modelErrs: number[] = [];
+  const olsErrs: number[] = [];
   const baseErrs: number[] = [];
   for (let f = 0; f < folds; f++) {
     const train = rows.filter((r) => hashOf(r.p.slug) % folds !== f);
     const test = rows.filter((r) => hashOf(r.p.slug) % folds === f);
     if (train.length === 0 || test.length === 0) continue;
-    const fit = olsFit(train, model);
-    const byCat = new Map<string, number[]>();
-    for (const r of train) {
-      const arr = byCat.get(r.category) ?? [];
-      arr.push(Math.exp(r.y));
-      byCat.set(r.category, arr);
-    }
-    const global = median(train.map((r) => Math.exp(r.y))) ?? 0.25;
-    for (const t of test) {
-      const pred = fit !== null ? predictLogRatio(t.x, t.category, fit) : Math.log(global);
-      modelErrs.push(Math.abs(t.y - pred));
-      const ratios = byCat.get(t.category) ?? [];
-      const med = ratios.length > 0 ? median(ratios)! : global;
-      const shrunk = ratios.length >= model.peer_shrink ? med : (ratios.length * med + model.peer_shrink * global) / (ratios.length + model.peer_shrink);
-      const base = Math.log(Math.min(model.peer_cap, Math.max(model.peer_floor, shrunk)));
-      baseErrs.push(Math.abs(t.y - base));
-    }
+    const truth = test.map((r) => r.y);
+    const [m, o, b] = absErrs(truth, specPredict(train, test, SHIPPED_SPEC, model, asOf), specPredict(train, test, OLS_SPEC, model, asOf), peerBaselinePredict(train, test, model));
+    modelErrs.push(...m);
+    olsErrs.push(...o);
+    baseErrs.push(...b);
   }
-  const m = summarizeErrs(modelErrs);
-  const b = summarizeErrs(baseErrs);
+  return summarizeTest('5-fold CV', modelErrs.length, modelErrs, olsErrs, baseErrs);
+}
+
+/**
+ * Twenty random time splits, seeded: a cutoff drawn between the 40th and 80th
+ * percentile of the listing dates, fit before it, test after it. The mean of
+ * the per-split median errors is the walk-forward headline that no single
+ * split can rig.
+ */
+function randomSplitSummary(rows: TrainRow[], model: ModelConstants, asOf: string): WalkForwardSummary {
+  const dated = rows.filter((r) => r.p.listed_at !== null).sort((a, b) => (a.p.listed_at! < b.p.listed_at! ? -1 : 1));
+  const first = Date.parse(`${dated[0]!.p.listed_at!}T00:00:00Z`);
+  const last = Date.parse(`${dated[dated.length - 1]!.p.listed_at!}T00:00:00Z`);
+  const rand = mulberry32(42);
+  const modelMeds: number[] = [];
+  const olsMeds: number[] = [];
+  const baseMeds: number[] = [];
+  const modelW2: number[] = [];
+  let wins = 0;
+  let done = 0;
+  for (let s = 0; s < model.wf_random_splits; s++) {
+    const frac = 0.4 + rand() * 0.4;
+    const cutMs = first + Math.floor((last - first) * frac);
+    const cut = new Date(cutMs).toISOString().slice(0, 10);
+    const train = rows.filter((r) => r.p.listed_at === null || r.p.listed_at < cut);
+    const test = dated.filter((r) => r.p.listed_at! >= cut);
+    if (test.length < 8 || train.length < 40) continue;
+    done++;
+    const truth = test.map((r) => r.y);
+    const [m, o, b] = absErrs(truth, specPredict(train, test, SHIPPED_SPEC, model, asOf), specPredict(train, test, OLS_SPEC, model, asOf), peerBaselinePredict(train, test, model));
+    const mMed = median(m) ?? 0;
+    const oMed = median(o) ?? 0;
+    modelMeds.push(mMed);
+    olsMeds.push(oMed);
+    baseMeds.push(median(b) ?? 0);
+    modelW2.push(m.filter((e) => e < Math.log(2)).length / m.length);
+    if (mMed < oMed) wins++;
+  }
+  const meanMed = (errs: number[]): number => Math.exp(errs.reduce((a, v) => a + v, 0) / Math.max(errs.length, 1));
   return {
-    folds,
-    n_test: modelErrs.length,
-    model_median_abs_log_err: round4(m.median),
-    model_mean_abs_log_err: round4(m.mean),
-    model_within_2x: round4(m.within2),
-    model_within_3x: round4(m.within3),
-    base_median_abs_log_err: round4(b.median),
-    base_mean_abs_log_err: round4(b.mean),
-    base_within_2x: round4(b.within2),
-    base_within_3x: round4(b.within3),
+    splits: done,
+    model_mean_median_x: round4(meanMed(modelMeds)),
+    ols_mean_median_x: round4(meanMed(olsMeds)),
+    base_mean_median_x: round4(meanMed(baseMeds)),
+    model_wins_vs_ols: wins,
+    model_mean_within_2x: round4(modelW2.reduce((a, v) => a + v, 0) / Math.max(modelW2.length, 1)),
+  };
+}
+
+/** The full validation: leave-one-out, three walk-forward splits, 5-fold, and the random-split summary. */
+function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string): ValidationSummary {
+  const loo = looValidation(rows, model, asOf);
+  const wf70 = walkForwardTest(rows, 0.7, model, asOf);
+  const tests: ValidationTest[] = [
+    loo.test,
+    wf70,
+    walkForwardTest(rows, 0.5, model, asOf),
+    walkForwardTest(rows, 0.8, model, asOf),
+    fiveFoldTest(rows, model, asOf),
+  ];
+  return {
+    tests,
+    rejected: loo.rejected,
+    random_splits: randomSplitSummary(rows, model, asOf),
+    loo_median_x: loo.test.model_median_x,
+    wf_median_x: wf70.model_median_x,
+  };
+}
+
+/** The fitted multiple at one TVL, other features at their training medians. */
+function sizeCurvePoint(
+  tvlUsd: number,
+  label: string,
+  beta: number[],
+  medGrowth: number,
+  medLogAge: number,
+  medChains: number,
+  bucketRows: TrainRow[],
+): SizeCurvePoint {
+  const x = [1, Math.log10(Math.max(tvlUsd, 1)), medGrowth, medLogAge, medChains];
+  const fitted = Math.exp(dot(beta, x));
+  const ratios = bucketRows.map((r) => Math.exp(r.y));
+  return {
+    tvl_usd: tvlUsd,
+    label,
+    fitted_multiple: round4(fitted),
+    observed_median: ratios.length > 0 ? round4(median(ratios) ?? 0) : null,
+    n: ratios.length,
   };
 }
 
 /**
- * Fit the radar-3 model on the snapshot: OLS on all priced live-token protocols,
- * shrunk category residuals, R² of the full fit, the 5-fold test, and the
- * per-category table the dashboard prints.
+ * Fit the radar-4 model on the snapshot: Huber regression on all priced
+ * live-token protocols, shrunk category residuals, R² of the full fit, the
+ * leave-one-out / walk-forward / 5-fold validation, and the per-category
+ * table and size curve the dashboard prints.
  */
 export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): FittedModel {
   const train = trainingRows(snapshot, snapshot.as_of, model);
-  const full = olsFit(train, model);
+  const full = fitSpec(train, SHIPPED_SPEC, model, snapshot.as_of);
   const yMean = train.reduce((a, r) => a + r.y, 0) / Math.max(train.length, 1);
   const beta = full !== null ? full.beta : [yMean, 0, 0, 0, 0];
   const catAdj = full !== null ? full.catAdj : new Map<string, number>();
   let ssRes = 0;
   let ssTot = 0;
   for (const r of train) {
-    const pred = predictLogRatio(r.x, r.category, { beta, catAdj });
+    const pred = predictSpec(designRow(r.p, snapshot.as_of, model, SHIPPED_SPEC, []), r.category, { beta, catAdj, bigCats: [], scale: 0, itersUsed: 0 });
     ssRes += (r.y - pred) ** 2;
     ssTot += (r.y - yMean) ** 2;
   }
   const rSquared = ssTot > 0 ? 1 - ssRes / ssTot : 0;
-  const validation = crossValidate(train, model);
+  const validation = validateAll(train, model, snapshot.as_of);
   const byCat = new Map<string, number[]>();
   for (const r of train) {
     const arr = byCat.get(r.category) ?? [];
@@ -502,6 +873,20 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
       fitted_factor: round4(Math.exp(catAdj.get(category) ?? 0)),
     }))
     .sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1));
+  const medGrowth = median(train.map((r) => Math.min(model.growth_cap, Math.max(model.growth_floor, finite(r.p.change_7d, 0))) / 100)) ?? 0;
+  const medLogAge = median(train.map((r) => Math.log1p(ageDays(snapshot.as_of, r.p.listed_at) ?? model.unknown_age_days))) ?? Math.log1p(365);
+  const medChains = median(train.map((r) => Math.min(r.p.chains.length, model.chain_cap))) ?? 1;
+  const bucketOf = (lt: number): string => (lt < 7 ? '<$10M' : lt < 8 ? '$10–100M' : lt < 9 ? '$100M–1B' : lt < 10 ? '$1–10B' : '>$10B');
+  const buckets: [number, string][] = [
+    [3_162_278, '<$10M'],
+    [31_622_777, '$10–100M'],
+    [316_227_766, '$100M–1B'],
+    [3_162_277_660, '$1–10B'],
+    [31_622_776_602, '>$10B'],
+  ];
+  const sizeCurve = buckets.map(([center, label]) =>
+    sizeCurvePoint(center, label, beta, medGrowth, medLogAge, medChains, train.filter((r) => bucketOf(Math.log10(Math.max(r.p.tvl_usd, 1))) === label)),
+  );
   return {
     beta,
     catAdj,
@@ -511,6 +896,9 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     train_median_ratio: round4(median(train.map((r) => Math.exp(r.y))) ?? 0),
     validation,
     categories,
+    size_curve: sizeCurve,
+    huber_scale: round4(full !== null ? full.scale : 0),
+    huber_iters_used: full !== null ? full.itersUsed : 0,
   };
 }
 
@@ -735,6 +1123,44 @@ function weeklyAction(p: SnapshotProtocol, variant: number): string {
   return acts[variant % acts.length]!;
 }
 
+/** The one risk that matters most for this protocol, from its own record — the eighth farm step. */
+function riskStep(p: SnapshotProtocol, age: number | null): FarmStep {
+  const chain = chainOf(p);
+  if (p.change_7d !== null && p.change_7d <= -15) {
+    return {
+      text: `Risk: TVL fell ${Math.abs(p.change_7d).toFixed(0)}% in the last 7 days — a falling TVL can mean the points program is winding down or capital is leaving, so size the position smaller and re-check before adding more.`,
+      cost: 'nothing to check',
+      time: '5 minutes',
+    };
+  }
+  if (age !== null && age < 180) {
+    return {
+      text: `Risk: the protocol has run with no token for only ${age} days — young protocols change their points rules often, so check the official docs again before each weekly action.`,
+      cost: 'nothing to check',
+      time: '5 minutes',
+    };
+  }
+  if (p.chains.length === 1) {
+    return {
+      text: `Risk: everything sits on one chain (${chain}) — a chain outage or a bridge pause would freeze the position, so keep it small enough to exit in one transaction.`,
+      cost: 'nothing to check',
+      time: '5 minutes',
+    };
+  }
+  if (p.tvl_usd >= 1_000_000_000) {
+    return {
+      text: `Risk: at $${(p.tvl_usd / 1e9).toFixed(1)}B TVL the protocol is already large — a launch, if it comes, is likely to pay a smaller multiple than a smaller protocol, so treat this as a steady position, not a lottery ticket.`,
+      cost: 'nothing to check',
+      time: '5 minutes',
+    };
+  }
+  return {
+    text: `Risk: points programs change without notice — a rule that qualified last month may not qualify next month, so check the protocol's own rewards page before every weekly action.`,
+    cost: 'nothing to check',
+    time: '5 minutes',
+  };
+}
+
 /**
  * A protocol's farm plan: seven steps, each an action with a cost and a time. The plan is
  * derived from the protocol's own record (category, chains, TVL, age), never from a
@@ -794,6 +1220,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       cost: 'nothing but the log',
       time: '5 minutes',
     },
+    riskStep(p, age),
   ];
 }
 
@@ -864,8 +1291,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     fit_n_train: fit.n_train,
     fit_n_categories: fit.n_categories,
     fit_train_median_ratio: fit.train_median_ratio,
+    fit_huber_k: model.huber_k,
+    fit_huber_scale: fit.huber_scale,
     validation: fit.validation,
     categories: fit.categories,
+    size_curve: fit.size_curve,
     watchlist: [...snapshot.watchlist],
     rows: board.map(radarRow),
     live,

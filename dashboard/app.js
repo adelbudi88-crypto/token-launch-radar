@@ -96,10 +96,11 @@ function filteredRows() {
 
 function renderStats() {
   const top = D.rows[0];
+  const loo = D.validation.tests[0];
   const stats = [
     { k: 'Protocols ranked', v: String(D.board_size), s: D.watchlist_size + ' on the watchlist · ' + D.early_size + ' early finds' },
     { k: 'Top implied value', v: money(top ? top.implied_value_usd : 0), s: top ? top.name : '—' },
-    { k: 'Out-of-sample error', v: '×' + Math.exp(D.validation.model_median_abs_log_err).toFixed(1), s: 'median prediction error, 5-fold CV · ' + (100 * D.validation.model_within_2x).toFixed(0) + '% of held-out mcaps within 2×' },
+    { k: 'Out-of-sample error', v: '×' + D.validation.loo_median_x.toFixed(2), s: 'median prediction error, leave-one-out · walk-forward ×' + D.validation.wf_median_x.toFixed(2) + ' · ' + (100 * loo.model_within_2x).toFixed(0) + '% of held-out mcaps within 2×' },
     { k: 'Live tokens set aside', v: String(D.live_size), s: 'shown at market value, never modelled' },
   ];
   $('stats').innerHTML = stats.map((s) =>
@@ -117,16 +118,33 @@ function signed(x, digits) {
   return (x < 0 ? '− ' : '+ ') + Math.abs(x).toFixed(digits);
 }
 
-/** The fitted formula, coefficients, and out-of-sample validation panel. */
+/** The fitted formula, coefficients, and the out-of-sample validation panel. */
 function renderModel() {
   const b = D.fit_beta;
   $('formula').innerHTML = 'implied value = TVL × exp(' + signed(b[0], 2) + ' ' + signed(b[1], 2) + '·log₁₀TVL ' + signed(b[2], 2) + '·growth ' + signed(b[3], 2) + '·ln(1+age) ' + signed(b[4], 2) + '·chains + category factor)';
-  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. An OLS regression on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches) predicts log(mcap / TVL) from log₁₀ TVL, 7-day growth, age with no token and chain count; the <b>category factor</b> is the mean residual of the category\u2019s live-token peers, shrunk toward zero when few peers price it (k = 5). The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is not worth 500× a $5M one. Every row above shows its own multiple; the detail view shows the arithmetic.';
+  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. A <b>Huber robust regression</b> (IRLS, k = ' + D.fit_huber_k + ', scale ' + D.fit_huber_scale.toFixed(2) + ') on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches) predicts log(mcap / TVL) from log₁₀ TVL, 7-day growth, age with no token and chain count; the <b>category factor</b> is the mean residual of the category\u2019s live-token peers, shrunk toward zero when few peers price it (k = 5). Huber down-weights the protocols whose market caps sit far from any line instead of letting them drag the fit. The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is not worth 500× a $5M one. Every row above shows its own multiple; the detail view shows the arithmetic.';
   const v = D.validation;
+  const rows = v.tests.map((t) =>
+    '<tr><td>' + esc(t.name) + ' <span class="muted">(n=' + t.n_test + ')</span></td>' +
+    '<td class="num"><b>×' + t.model_median_x.toFixed(2) + '</b> · ' + (100 * t.model_within_2x).toFixed(0) + '% within 2×</td>' +
+    '<td class="num">×' + t.ols_median_x.toFixed(2) + ' · ' + (100 * t.ols_within_2x).toFixed(0) + '%</td>' +
+    '<td class="num">×' + t.base_median_x.toFixed(2) + ' · ' + (100 * t.base_within_2x).toFixed(0) + '%</td></tr>').join('');
+  const rs = v.random_splits;
   $('validation').innerHTML =
-    '<div class="valcard win"><div class="k">Fitted model · 5-fold CV</div><div class="v">×' + Math.exp(v.model_median_abs_log_err).toFixed(2) + ' median error</div><div class="s">' + (100 * v.model_within_2x).toFixed(1) + '% within 2× · ' + (100 * v.model_within_3x).toFixed(1) + '% within 3× of the held-out market cap</div></div>' +
-    '<div class="valcard"><div class="k">Baseline · category peer median</div><div class="v">×' + Math.exp(v.base_median_abs_log_err).toFixed(2) + ' median error</div><div class="s">' + (100 * v.base_within_2x).toFixed(1) + '% within 2× · ' + (100 * v.base_within_3x).toFixed(1) + '% within 3× of the held-out market cap</div></div>' +
-    '<p class="valnote">Out-of-sample test, seeded 5-fold cross-validation on ' + v.n_test + ' live-token protocols: the model is fitted on 4/5 of the protocols and tested on the held-out 1/5, five times over. The fitted model beats the category-median baseline on every metric — median error, mean error, and hit rate within 2× and 3×.</p>';
+    '<table class="peertable"><thead><tr><th>Out-of-sample test</th><th class="num">Radar-4 · Huber</th><th class="num">Radar-3 · OLS</th><th class="num">Baseline · peer median</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<p class="valnote">Every test scores the three models on the <b>same held-out protocols</b> — median prediction error as a multiple, and the share of held-out market caps predicted within 2×. Leave-one-out predicts each live-token protocol from the other 111; the walk-forward splits fit on the oldest listings and test on the newest, which is what a launch radar is actually for; the 5-fold split is the same seeded split radar-3 used. Across <b>' + rs.splits + ' random time splits</b> the robust fit averages <b>×' + rs.model_mean_median_x.toFixed(2) + '</b> median error (OLS ×' + rs.ols_mean_median_x.toFixed(2) + ', peer median ×' + rs.base_mean_median_x.toFixed(2) + ') and beats OLS on ' + rs.model_wins_vs_ols + ' of ' + rs.splits + ' splits. The honest limit: a median error near ×3 means most predictions are still rough — only about a third land within 2× of the true market cap.</p>' +
+    '<p class="valnote"><b>Tested and rejected</b> — each variant was built and scored leave-one-out against the shipped fit (×' + v.loo_median_x.toFixed(2) + '): ' + v.rejected.map((r) => esc(r.name) + ' ×' + r.loo_median_x.toFixed(2) + ' — ' + esc(r.note)).join('; ') + '.</p>';
+}
+
+/** The size curve: the fitted multiple at each size, next to what the market actually pays there. */
+function renderSizeCurve() {
+  const rows = D.size_curve.map((p) =>
+    '<tr><td>' + esc(p.label) + '</td><td class="num">' + p.n + '</td>' +
+    '<td class="num"><b>×' + p.fitted_multiple.toFixed(3) + '</b></td>' +
+    '<td class="num">' + (p.observed_median === null ? '—' : '×' + p.observed_median.toFixed(3)) + '</td></tr>').join('');
+  $('sizecurve').innerHTML =
+    '<table class="peertable"><thead><tr><th>Protocol size (TVL)</th><th class="num">Live peers</th><th class="num">Fitted multiple</th><th class="num">Observed median mcap / TVL</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+    '<p class="valnote">The fitted multiple falls roughly 3× for every 10× of TVL — the curve the regression draws, checked against the median ratio the market actually pays in each size bucket. The smallest bucket is the one place the line overshoots (×0.75 fitted vs ×0.54 observed): small protocols vary the most, and the fit does not pretend otherwise.</p>';
 }
 
 function fillFilters() {
@@ -215,7 +233,7 @@ function openDetail(slug) {
     '<div class="math">' + math.map((row) =>
       '<div><span>' + esc(row[0]) + '</span><span>' + esc(row[1]) + (row[2] ? ' = ' + esc(row[2]) : '') + '</span></div>').join('') +
       '<div class="tot"><span>Implied value</span><span>' + money(r.implied_value_usd) + '</span></div></div>' +
-    '<h3>Farm plan — 7 steps</h3>' +
+    '<h3>Farm plan — ' + r.farm_steps.length + ' steps</h3>' +
     '<ol class="steps">' + r.farm_steps.map((s) => {
       const parts = s.split(' Cost: ');
       const text = parts[0] || s;
@@ -248,6 +266,7 @@ function init() {
   $('footline').textContent = 'Snapshot ' + D.as_of + ' · floor $' + (D.floor_usd / 1e6) + 'M · ' + D.board_size + ' rows: ' + D.watchlist_size + ' watchlist + ' + D.early_size + ' early · model ' + D.model_version + '.';
   renderStats();
   renderModel();
+  renderSizeCurve();
   renderCategories();
   fillFilters();
   renderBoard();

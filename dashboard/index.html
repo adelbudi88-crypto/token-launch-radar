@@ -29,7 +29,7 @@
 
   <section class="formulastrip">
     <span class="formula">implied value = TVL × <b>fitted multiple</b></span>
-    <span class="muted">Fitted live from 112 live-token protocols in the snapshot and validated out-of-sample (5-fold) — the model and its test are below the board.</span>
+    <span class="muted">Huber robust fit, live from 112 live-token protocols in the snapshot — validated leave-one-out and walk-forward, with the size curve and the rejected variants below the board.</span>
   </section>
 
   <section class="controls">
@@ -85,6 +85,10 @@
     <p class="formula" id="formula">—</p>
     <p class="explain" id="modelexplain">—</p>
     <div class="valgrid" id="validation"></div>
+    <div class="peers">
+      <h3>The size curve <span class="muted">(what a dollar of TVL is worth at each size)</span></h3>
+      <div id="sizecurve"></div>
+    </div>
     <div class="peers">
       <h3>Fitted category factors <span class="muted">(live-token protocols only — observed median vs fitted factor)</span></h3>
       <table class="peertable">
