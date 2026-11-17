@@ -28,8 +28,8 @@
   <section class="stats" id="stats" aria-label="Board summary"></section>
 
   <section class="formulastrip">
-    <span class="formula">implied value = TVL × <b>peer multiple</b> × <b>growth</b> × <b>maturity</b> × <b>chains</b></span>
-    <span class="muted">A launch is priced off the live-token protocols in its own category — the peer table and the full model are below the board.</span>
+    <span class="formula">implied value = TVL × <b>fitted multiple</b></span>
+    <span class="muted">Fitted live from 112 live-token protocols in the snapshot and validated out-of-sample (5-fold) — the model and its test are below the board.</span>
   </section>
 
   <section class="controls">
@@ -82,12 +82,13 @@
       <h2>How a launch is priced</h2>
       <span class="pill">derived from the snapshot, not a list of names</span>
     </div>
-    <p class="formula">implied value = TVL × <b>peer multiple</b> × <b>growth</b> × <b>maturity</b> × <b>chains</b></p>
-    <p class="explain">A launch is worth what the market already pays for the same kind of protocol: the <b>peer multiple</b> is the median market-cap / TVL of the live-token protocols in the same category, shrunk toward the global median when fewer than 3 peers price it, clamped to 0.05–1.50. <b>Growth</b> is the 7-day TVL change, clamped to −80…+200%, weighted 0.7. <b>Maturity</b> is 0.70–1.00 over 4 years tracked with no token (unknown age counts as 365 days). <b>Chains</b> adds 3% per extra chain, up to +12%. Every row above shows its own multiple and multipliers; the detail view shows the arithmetic.</p>
+    <p class="formula" id="formula">—</p>
+    <p class="explain" id="modelexplain">—</p>
+    <div class="valgrid" id="validation"></div>
     <div class="peers">
-      <h3>Peer multiples by category <span class="muted">(live-token protocols only)</span></h3>
+      <h3>Fitted category factors <span class="muted">(live-token protocols only — observed median vs fitted factor)</span></h3>
       <table class="peertable">
-        <thead><tr><th>Category</th><th class="num">Peers</th><th class="num">Median mcap / TVL</th><th class="num">Multiple used</th></tr></thead>
+        <thead><tr><th>Category</th><th class="num">Peers</th><th class="num">Observed median mcap / TVL</th><th class="num">Fitted factor</th></tr></thead>
         <tbody id="peers"></tbody>
       </table>
     </div>

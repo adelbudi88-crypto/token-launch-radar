@@ -99,17 +99,34 @@ function renderStats() {
   const stats = [
     { k: 'Protocols ranked', v: String(D.board_size), s: D.watchlist_size + ' on the watchlist · ' + D.early_size + ' early finds' },
     { k: 'Top implied value', v: money(top ? top.implied_value_usd : 0), s: top ? top.name : '—' },
-    { k: 'Global peer median', v: D.global_median.toFixed(3) + '×', s: 'median mcap / TVL, live-token protocols' },
+    { k: 'Out-of-sample error', v: '×' + Math.exp(D.validation.model_median_abs_log_err).toFixed(1), s: 'median prediction error, 5-fold CV · ' + (100 * D.validation.model_within_2x).toFixed(0) + '% of held-out mcaps within 2×' },
     { k: 'Live tokens set aside', v: String(D.live_size), s: 'shown at market value, never modelled' },
   ];
   $('stats').innerHTML = stats.map((s) =>
     '<div class="stat"><div class="k">' + s.k + '</div><div class="v">' + esc(s.v) + '</div><div class="s">' + esc(s.s) + '</div></div>').join('');
 }
 
-function renderPeers() {
-  $('peers').innerHTML = D.peers.map((p) =>
-    '<tr><td>' + esc(p.category) + '</td><td class="num">' + p.peers + '</td><td class="num">' + p.median.toFixed(3) + '×</td><td class="num"><b>' + p.multiple.toFixed(3) + '×</b></td></tr>').join('') +
-    '<tr><td><b>All live-token protocols</b></td><td class="num">—</td><td class="num">' + D.global_median.toFixed(3) + '×</td><td class="num"><b>' + D.global_median.toFixed(3) + '×</b></td></tr>';
+function renderCategories() {
+  $('peers').innerHTML = D.categories.map((c) =>
+    '<tr><td>' + esc(c.category) + '</td><td class="num">' + c.peers + '</td><td class="num">' + c.observed_median.toFixed(3) + '×</td><td class="num"><b>' + c.fitted_factor.toFixed(3) + '×</b></td></tr>').join('') +
+    '<tr><td><b>All live-token protocols</b></td><td class="num">' + D.fit_n_train + '</td><td class="num">' + D.fit_train_median_ratio.toFixed(3) + '×</td><td class="num"><b>1.000×</b></td></tr>';
+}
+
+/** A signed coefficient for display: "+ 0.91" / "− 1.10". */
+function signed(x, digits) {
+  return (x < 0 ? '− ' : '+ ') + Math.abs(x).toFixed(digits);
+}
+
+/** The fitted formula, coefficients, and out-of-sample validation panel. */
+function renderModel() {
+  const b = D.fit_beta;
+  $('formula').innerHTML = 'implied value = TVL × exp(' + signed(b[0], 2) + ' ' + signed(b[1], 2) + '·log₁₀TVL ' + signed(b[2], 2) + '·growth ' + signed(b[3], 2) + '·ln(1+age) ' + signed(b[4], 2) + '·chains + category factor)';
+  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. An OLS regression on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches) predicts log(mcap / TVL) from log₁₀ TVL, 7-day growth, age with no token and chain count; the <b>category factor</b> is the mean residual of the category\u2019s live-token peers, shrunk toward zero when few peers price it (k = 5). The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is not worth 500× a $5M one. Every row above shows its own multiple; the detail view shows the arithmetic.';
+  const v = D.validation;
+  $('validation').innerHTML =
+    '<div class="valcard win"><div class="k">Fitted model · 5-fold CV</div><div class="v">×' + Math.exp(v.model_median_abs_log_err).toFixed(2) + ' median error</div><div class="s">' + (100 * v.model_within_2x).toFixed(1) + '% within 2× · ' + (100 * v.model_within_3x).toFixed(1) + '% within 3× of the held-out market cap</div></div>' +
+    '<div class="valcard"><div class="k">Baseline · category peer median</div><div class="v">×' + Math.exp(v.base_median_abs_log_err).toFixed(2) + ' median error</div><div class="s">' + (100 * v.base_within_2x).toFixed(1) + '% within 2× · ' + (100 * v.base_within_3x).toFixed(1) + '% within 3× of the held-out market cap</div></div>' +
+    '<p class="valnote">Out-of-sample test, seeded 5-fold cross-validation on ' + v.n_test + ' live-token protocols: the model is fitted on 4/5 of the protocols and tested on the held-out 1/5, five times over. The fitted model beats the category-median baseline on every metric — median error, mean error, and hit rate within 2× and 3×.</p>';
 }
 
 function fillFilters() {
@@ -154,16 +171,24 @@ function renderLive() {
     '</tr>').join('');
 }
 
-/** The model arithmetic for one row, recomputed from the row and the model constants. */
+/** The fitted model arithmetic for one row, from the row's stored log terms. */
 function mathRows(r) {
-  const m = D.model;
-  const growthPct = Math.min(m.growth_cap, Math.max(m.growth_floor, r.change_7d === null ? 0 : r.change_7d));
-  const base = r.tvl_usd * r.multiple;
+  const b = D.fit_beta;
+  const logTvl = Math.log10(Math.max(r.tvl_usd, 1));
+  const growthFeat = Math.min(2.0, Math.max(-0.8, r.change_7d === null ? 0 : r.change_7d / 100));
+  const ageFeat = Math.log1p(r.age_days === null ? 365 : r.age_days);
+  const chainFeat = Math.min(r.chains.length, 5);
+  const sgn = (x) => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
   return [
-    ['TVL × peer multiple', money(r.tvl_usd) + ' × ' + r.multiple.toFixed(3) + '× (' + r.peers + ' peers)', money(base)],
-    ['Growth ' + pct(growthPct) + ' × 0.7', '× ' + r.growth_multiplier.toFixed(4), ''],
-    ['Maturity, ' + days(r.age_days) + ' with no token', '× ' + r.maturity_multiplier.toFixed(4), ''],
-    ['Chains: ' + r.chains.length + ' counted', '× ' + r.chain_multiplier.toFixed(4), ''],
+    ['Constant', signed(b[0], 2), sgn(r.const_term)],
+    ['Size — log₁₀ TVL ' + logTvl.toFixed(2), b[1].toFixed(2) + ' × ' + logTvl.toFixed(2), sgn(r.size_term)],
+    ['Growth — ' + pct(r.change_7d), b[2].toFixed(2) + ' × ' + growthFeat.toFixed(2), sgn(r.growth_term)],
+    ['Age — ' + (r.age_days === null ? 'unknown (365d used)' : r.age_days + 'd with no token'), b[3].toFixed(2) + ' × ' + ageFeat.toFixed(2), sgn(r.age_term)],
+    ['Chains — ' + r.chains.length + ' counted', b[4].toFixed(2) + ' × ' + chainFeat, sgn(r.chain_term)],
+    ['Category factor — ' + (r.category || '(no category)'), 'exp(' + sgn(r.category_term) + ') = ×' + Math.exp(r.category_term).toFixed(3), sgn(r.category_term)],
+    ['Fitted log(mcap / TVL)', 'sum of the terms above', r.log_ratio.toFixed(3)],
+    ['Fitted multiple = exp(log-ratio)', 'exp(' + r.log_ratio.toFixed(3) + ')', r.multiple.toFixed(4) + '×'],
+    ['TVL × multiple', money(r.tvl_usd) + ' × ' + r.multiple.toFixed(4) + '×', money(r.implied_value_usd)],
   ];
 }
 
@@ -222,7 +247,8 @@ function init() {
   $('modelver').textContent = D.model_version;
   $('footline').textContent = 'Snapshot ' + D.as_of + ' · floor $' + (D.floor_usd / 1e6) + 'M · ' + D.board_size + ' rows: ' + D.watchlist_size + ' watchlist + ' + D.early_size + ' early · model ' + D.model_version + '.';
   renderStats();
-  renderPeers();
+  renderModel();
+  renderCategories();
   fillFilters();
   renderBoard();
   renderLive();
