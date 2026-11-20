@@ -104,7 +104,7 @@ function renderStats() {
   const loo = D.validation.tests[0];
   const vc = D.verdict_counts;
   const stats = [
-    { k: 'Protocols ranked', v: String(D.board_size), s: D.watchlist_size + ' watchlist · ' + D.early_size + ' early · ' + D.integrity.total_protocols + ' accounted for' },
+    { k: 'Protocols ranked', v: String(D.board_size), s: D.integrity.watchlist_covered + '/' + D.integrity.watchlist_total + ' watchlist · ' + D.early_size + ' early · ' + D.integrity.total_protocols + ' accounted for' },
     { k: 'Top expected value', v: money(top ? top.expected_value_usd : 0), s: top ? top.name + ' · odds ' + top.token_odds.toFixed(2) + ' · implied ' + money(top.implied_raw_usd) : '—' },
     { k: 'Out-of-sample error', v: '×' + D.validation.loo_median_x.toFixed(2), s: 'leave-one-out · walk-forward ×' + D.validation.wf_median_x.toFixed(2) + ' · ' + (100 * loo.model_within_2x).toFixed(0) + '% within 2×' },
     { k: 'Farm verdicts', v: vc.FARM + ' FARM', s: vc.THIN + ' THIN · ' + vc.SKIP + ' SKIP — netted to one number each' },
@@ -118,7 +118,8 @@ function renderIntegrity() {
   const reasons = it.excluded_by_reason.map((r) => r.count + ' ' + r.reason.replace('exchange product (CEX)', 'CEX').replace('wrapped / staked product of a traded token', 'wrapped/staked').replace('versioned pool of another protocol', 'versioned pools').replace('exchange-branded product', 'exchange-branded')).join(', ');
   $('integrity').innerHTML =
     '<span class="strip-k">Integrity — all ' + it.total_protocols + ' protocols accounted for</span>' +
-    '<span><b>' + it.ranked + ' ranked</b> · ' + it.live_token + ' live-token at market value · ' + it.excluded_total + ' set aside (' + esc(reasons) + ') · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · gaps: ' + it.null_change_7d + ' missing 7d, ' + it.null_listed_at + ' missing listing date · training ' + it.n_train_raw + ' → ' + it.n_train_dedup + ' after dedup</span>';
+    '<span><b>' + it.ranked + ' ranked</b> · ' + it.live_token + ' live-token at market value · ' + it.excluded_total + ' set aside (' + esc(reasons) + ') · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · gaps: ' + it.null_change_7d + ' missing 7d, ' + it.null_listed_at + ' missing listing date · training ' + it.n_train_raw + ' → ' + it.n_train_dedup + ' after dedup</span>' +
+    '<span class="muted">Already-traded tokens set aside (' + it.excluded_traded_tokens.length + ' — the protocol IS the token, no future token to launch): ' + esc(it.excluded_traded_tokens.join(' · ')) + '</span>';
 }
 
 function renderOosStrip() {

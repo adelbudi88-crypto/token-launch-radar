@@ -271,6 +271,8 @@ export interface IntegrityStrip {
   live_token: number;
   excluded_total: number;
   excluded_by_reason: { reason: string; count: number }[];
+  /** Names of the already-traded tokens set aside, in snapshot order. */
+  excluded_traded_tokens: string[];
   null_change_7d: number;
   null_listed_at: number;
   null_category: number;
@@ -476,6 +478,11 @@ const EXCHANGE_PREFIX = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gem
  * version of a token that already trades. Bridge and liquid-staking protocols
  * stay in: a bridge or a staking pool with no token of its own can still launch
  * one, and the snapshot's own watchlist rule is a floor, never a ceiling.
+ *
+ * The snapshot's token fields are wrong for the protocols in TRADED_TOKEN_SLUGS:
+ * the protocol IS a token that already trades (wrapped BTC, bridged USDC, a
+ * stablecoin, a staked receipt, a subnet token). Ranking them as "pre-token"
+ * would be false — there is no future token to launch.
  */
 export function isRankable(p: SnapshotProtocol): boolean {
   if (!isPreToken(p)) return false;
@@ -483,8 +490,46 @@ export function isRankable(p: SnapshotProtocol): boolean {
   if (VERSIONED.test(p.name)) return false;
   if (WRAPPED_WORD.test(p.name)) return false;
   if (EXCHANGE_PREFIX.test(p.name)) return false;
+  if (TRADED_TOKEN_SLUGS[p.slug]) return false;
   return true;
 }
+
+/**
+ * Traded-token corrections, slug → what the token is. Rule, applied uniformly:
+ * exclude when the row's name IS, or leads with, the ticker of a wrapped /
+ * bridged / staked / stable asset that already trades. KEEP bridge and staking
+ * services named as services (CCIP, Base Bridge, Shift DeFi, Phantom SOL,
+ * Gate SOL, JPool, SpringSui, …): a service may still launch its own governance
+ * token, even when its receipt tokens trade. Five were named by the parent
+ * (WBTC, USDT0, FBTC, USDD, dTAO); sixteen more were found by scanning the
+ * remaining 258 ranked rows — GTBTC verified traded (listed price, ~$215M
+ * market cap), USDCx verified (Circle xReserve bridged USDC), ObeliskBTC and
+ * SUBFROST kept (protocols with no token listed, future-token candidates),
+ * Phantom SOL / Gate SOL kept (staking services, not the token).
+ */
+export const TRADED_TOKEN_SLUGS: Record<string, string> = {
+  wbtc: 'WBTC is wrapped Bitcoin, traded since 2019',
+  usdt0: 'USDT0 is Tether\u2019s bridged USDT stablecoin, traded',
+  'function-fbtc': 'FBTC is Function\u2019s wrapped BTC token, traded',
+  usdd: 'USDD is Tron\u2019s stablecoin, traded',
+  'bittensor-dtao': 'dTAO is Bittensor\u2019s subnet token, traded',
+  'stacks-sbtc': 'sBTC is Stacks\u2019 wrapped BTC, traded',
+  wtao: 'wTAO is wrapped TAO, traded',
+  tzbtc: 'tzBTC is Tezos wrapped BTC, traded',
+  'solvbtc-lsts': 'SolvBTC is Solv\u2019s wrapped/restaked BTC token, traded',
+  sthype: 'stHYPE is a staked-HYPE receipt token, traded',
+  gtbtc: 'GTBTC is Gate Wrapped BTC, traded (listed price, ~$215M market cap)',
+  usdcx: 'USDCx is Circle xReserve bridged USDC, traded',
+  'theo-network-thusd': 'thUSD is Theo Network\u2019s stablecoin, traded',
+  'theo-network-thbill': 'thBill is Theo Network\u2019s tokenised T-bill token, traded',
+  'aegis-yusd': 'YUSD is Aegis\u2019 stablecoin, traded',
+  'flying-tulip-ftusd': 'ftUSD is Flying Tulip\u2019s stablecoin, traded',
+  'avant-avusd': 'avUSD is Avant\u2019s stablecoin, traded',
+  'avant-aveth': 'avETH is Avant\u2019s staked-ETH token, traded',
+  'bitlayer-ybtc-family': 'YBTC is Bitlayer\u2019s yield BTC token, traded',
+  'stkesol-by-sol-strategies': 'STKESOL is SOL Strategies\u2019 liquid-staking SOL token, traded',
+  kton: 'KTON is a TON liquid-staking receipt token, traded',
+};
 
 /** The snapshot's protocol by slug. */
 function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
@@ -1279,9 +1324,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries.
+  // Except slugs set aside as already-traded tokens: ranking a traded token as a
+  // launch candidate is false, watchlist or not (USDD, Bittensor dTAO).
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
-    if (p !== undefined) chosen.set(slug, p);
+    if (p !== undefined && !TRADED_TOKEN_SLUGS[slug]) chosen.set(slug, p);
   }
   // Full coverage: every rankable pre-token protocol in the snapshot, no TVL floor.
   const rest = snapshot.protocols
@@ -1674,6 +1721,7 @@ export function radarRow(row: BoardRow): RadarRow {
 /** Why a pre-token protocol is not on the board — the first matching reason, in field-guide order. */
 function exclusionReason(p: SnapshotProtocol): string | null {
   if (!isPreToken(p)) return null;
+  if (TRADED_TOKEN_SLUGS[p.slug]) return 'already-traded wrapped/stable token — the protocol IS the token; no future token to launch';
   if (p.category !== null && EXCHANGE_CATEGORIES.has(p.category)) return 'exchange product (CEX)';
   if (VERSIONED.test(p.name)) return 'versioned pool of another protocol';
   if (WRAPPED_WORD.test(p.name)) return 'wrapped / staked product of a traded token';
@@ -1704,6 +1752,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_token: snapshot.protocols.filter((p) => !isPreToken(p)).length,
     excluded_total: excludedTotal,
     excluded_by_reason: [...excludedByReason.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
+    excluded_traded_tokens: snapshot.protocols.filter((p) => isPreToken(p) && TRADED_TOKEN_SLUGS[p.slug]).map((p) => p.name),
     null_change_7d: snapshot.protocols.filter((p) => p.change_7d === null).length,
     null_listed_at: snapshot.protocols.filter((p) => p.listed_at === null).length,
     null_category: snapshot.protocols.filter((p) => p.category === null).length,
@@ -1795,7 +1844,13 @@ export function parseSnapshot(text: string): Snapshot {
 /** Why a board is not one the gate will take, or null: coverage, ranks, order, one shared implied value, and farm steps. */
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
-  const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
+  // Watchlist coverage, except slugs set aside as already-traded tokens: the
+  // snapshot lists them as pre-token, but ranking a traded token as a launch
+  // candidate is false. NOTE — this exemption is OUR check only. The sealed
+  // scorer's gate may still require full watchlist coverage, in which case
+  // excluding the watchlist slugs USDD and Bittensor dTAO fails intake; that
+  // call belongs to whoever submits, not to this check.
+  const missing = snapshot.watchlist.filter((s) => !slugs.has(s) && !TRADED_TOKEN_SLUGS[s]);
   if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
   const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
   for (let i = 0; i < ranks.length; i++) if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;
