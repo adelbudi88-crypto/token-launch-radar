@@ -273,6 +273,8 @@ export interface IntegrityStrip {
   excluded_by_reason: { reason: string; count: number }[];
   /** Names of the already-traded tokens set aside, in snapshot order. */
   excluded_traded_tokens: string[];
+  /** Names of the already-traded tokens forced onto the board by the gate's watchlist. */
+  watchlist_traded_override: string[];
   null_change_7d: number;
   null_listed_at: number;
   null_category: number;
@@ -319,6 +321,9 @@ export interface BoardRow {
   farm_verdict: 'FARM' | 'THIN' | 'SKIP';
   farm_net_usd: number;
   farm_deposit_usd: number;
+  /** Set only on gate-forced already-traded rows (USDD, Bittensor dTAO). */
+  already_traded?: boolean;
+  already_traded_note?: string;
   model: {
     multiple: number;
     peers: number;
@@ -359,6 +364,8 @@ export interface RadarRow {
   farm_verdict: 'FARM' | 'THIN' | 'SKIP';
   farm_net_usd: number;
   farm_deposit_usd: number;
+  already_traded?: boolean;
+  already_traded_note?: string;
   multiple: number;
   peers: number;
   base_usd: number;
@@ -490,6 +497,7 @@ export function isRankable(p: SnapshotProtocol): boolean {
   if (VERSIONED.test(p.name)) return false;
   if (WRAPPED_WORD.test(p.name)) return false;
   if (EXCHANGE_PREFIX.test(p.name)) return false;
+  if (WATCHLIST_TRADED_OVERRIDE.has(p.slug)) return true;
   if (TRADED_TOKEN_SLUGS[p.slug]) return false;
   return true;
 }
@@ -530,6 +538,18 @@ export const TRADED_TOKEN_SLUGS: Record<string, string> = {
   'stkesol-by-sol-strategies': 'STKESOL is SOL Strategies\u2019 liquid-staking SOL token, traded',
   kton: 'KTON is a TON liquid-staking receipt token, traded',
 };
+
+/**
+ * Two traded tokens the gate FORCES onto the board: USDD and Bittensor dTAO are
+ * in the kit's 40-slug watchlist, and the sealed gate requires
+ * min_watchlist_coverage = 1 (competition.yaml line 222, RULES.txt line 32) —
+ * every watchlist slug must appear among the rows. Excluding them fails intake,
+ * so they stay ranked, but flagged everywhere as already-traded: verdict SKIP,
+ * deposit $0, do-not-farm steps, an ALREADY TRADED badge, and an explicit
+ * integrity-strip note. No other traded token is in the watchlist, so the
+ * other nineteen stay excluded.
+ */
+export const WATCHLIST_TRADED_OVERRIDE: ReadonlySet<string> = new Set(['usdd', 'bittensor-dtao']);
 
 /** The snapshot's protocol by slug. */
 function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
@@ -1324,11 +1344,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug, even one the snapshot no longer carries.
-  // Except slugs set aside as already-traded tokens: ranking a traded token as a
-  // launch candidate is false, watchlist or not (USDD, Bittensor dTAO).
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
-    if (p !== undefined && !TRADED_TOKEN_SLUGS[slug]) chosen.set(slug, p);
+    if (p !== undefined) chosen.set(slug, p);
   }
   // Full coverage: every rankable pre-token protocol in the snapshot, no TVL floor.
   const rest = snapshot.protocols
@@ -1347,7 +1365,15 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     const v = impliedValue(p, snapshot.as_of, model, fitted);
     const o = odds.get(p.slug)!;
     const expected = Math.max(1, Math.round(o.odds * v.implied));
-    return { p, v, odds: o, expected, range: ranges.get(p.slug)!, verdict: farmVerdictFor(p, expected, model) };
+    const baseVerdict = farmVerdictFor(p, expected, model);
+    // Gate-forced already-traded rows (USDD, Bittensor dTAO): the verdict is
+    // SKIP with a $0 deposit whatever the model nets — the token already
+    // trades, so there is nothing to farm. The net figure stays the model's
+    // own number; only the verdict, the deposit and the steps are overridden.
+    const verdict = WATCHLIST_TRADED_OVERRIDE.has(p.slug)
+      ? { ...baseVerdict, verdict: 'SKIP' as const, deposit_usd: 0 }
+      : baseVerdict;
+    return { p, v, odds: o, expected, range: ranges.get(p.slug)!, verdict };
   });
   scored.sort((a, b) => b.expected - a.expected || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   // A board is a ranking: force strictly decreasing values so no two rows tie.
@@ -1382,6 +1408,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     farm_verdict: s.verdict.verdict,
     farm_net_usd: s.verdict.net_usd,
     farm_deposit_usd: s.verdict.deposit_usd,
+    already_traded: WATCHLIST_TRADED_OVERRIDE.has(s.p.slug) ? true : undefined,
+    already_traded_note: WATCHLIST_TRADED_OVERRIDE.has(s.p.slug) ? TRADED_TOKEN_SLUGS[s.p.slug] : undefined,
     model: {
       multiple: s.v.multiple,
       peers: s.v.peers,
@@ -1395,8 +1423,39 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
       category_term: s.v.categoryTerm,
       age_days: s.v.age,
     },
-    farm_steps: farmSteps(s.p, s.v.age).map(stepText),
+    farm_steps: (WATCHLIST_TRADED_OVERRIDE.has(s.p.slug) ? doNotFarmSteps(s.p) : farmSteps(s.p, s.v.age)).map(stepText),
   }));
+}
+
+/**
+ * The farm plan for a gate-forced already-traded row: four steps that say do
+ * not farm, each within the gate's 20..600 characters. The row is on the board
+ * only because the gate's watchlist requires it; its token already trades.
+ */
+export function doNotFarmSteps(p: SnapshotProtocol): FarmStep[] {
+  const note = TRADED_TOKEN_SLUGS[p.slug] ?? 'this token already trades';
+  return [
+    {
+      text: `Do not farm ${p.name}: ${note} — there is no future token to launch, so no airdrop can pay for farming it.`,
+      cost: 'nothing — do not deposit',
+      time: '1 minute to read this',
+    },
+    {
+      text: `If you already hold ${p.name}, treat it as a market position, not a farm: its price already reflects the market, and no points program on it can issue a new token.`,
+      cost: 'nothing to change',
+      time: '1 minute',
+    },
+    {
+      text: `Do not pay gas chasing snapshots, quests or "points" for ${p.name}: a campaign attached to a token that already trades cannot pay out a launch.`,
+      cost: 'save the gas — $0 here',
+      time: '1 minute',
+    },
+    {
+      text: `If you want exposure, buy the token on an exchange instead of farming, and spend the farming time and gas on a row on this board with verdict FARM.`,
+      cost: 'whatever you choose to buy, nothing to farm',
+      time: '5 minutes to pick a FARM row',
+    },
+  ];
 }
 
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
@@ -1704,6 +1763,8 @@ export function radarRow(row: BoardRow): RadarRow {
     farm_verdict: row.farm_verdict,
     farm_net_usd: row.farm_net_usd,
     farm_deposit_usd: row.farm_deposit_usd,
+    already_traded: row.already_traded,
+    already_traded_note: row.already_traded_note,
     multiple: row.model.multiple,
     peers: row.model.peers,
     base_usd: row.model.base_usd,
@@ -1721,6 +1782,7 @@ export function radarRow(row: BoardRow): RadarRow {
 /** Why a pre-token protocol is not on the board — the first matching reason, in field-guide order. */
 function exclusionReason(p: SnapshotProtocol): string | null {
   if (!isPreToken(p)) return null;
+  if (WATCHLIST_TRADED_OVERRIDE.has(p.slug)) return null;
   if (TRADED_TOKEN_SLUGS[p.slug]) return 'already-traded wrapped/stable token — the protocol IS the token; no future token to launch';
   if (p.category !== null && EXCHANGE_CATEGORIES.has(p.category)) return 'exchange product (CEX)';
   if (VERSIONED.test(p.name)) return 'versioned pool of another protocol';
@@ -1752,7 +1814,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     live_token: snapshot.protocols.filter((p) => !isPreToken(p)).length,
     excluded_total: excludedTotal,
     excluded_by_reason: [...excludedByReason.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
-    excluded_traded_tokens: snapshot.protocols.filter((p) => isPreToken(p) && TRADED_TOKEN_SLUGS[p.slug]).map((p) => p.name),
+    excluded_traded_tokens: snapshot.protocols.filter((p) => isPreToken(p) && TRADED_TOKEN_SLUGS[p.slug] && !WATCHLIST_TRADED_OVERRIDE.has(p.slug)).map((p) => p.name),
+    watchlist_traded_override: snapshot.protocols.filter((p) => WATCHLIST_TRADED_OVERRIDE.has(p.slug)).map((p) => p.name),
     null_change_7d: snapshot.protocols.filter((p) => p.change_7d === null).length,
     null_listed_at: snapshot.protocols.filter((p) => p.listed_at === null).length,
     null_category: snapshot.protocols.filter((p) => p.category === null).length,
@@ -1844,13 +1907,7 @@ export function parseSnapshot(text: string): Snapshot {
 /** Why a board is not one the gate will take, or null: coverage, ranks, order, one shared implied value, and farm steps. */
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
-  // Watchlist coverage, except slugs set aside as already-traded tokens: the
-  // snapshot lists them as pre-token, but ranking a traded token as a launch
-  // candidate is false. NOTE — this exemption is OUR check only. The sealed
-  // scorer's gate may still require full watchlist coverage, in which case
-  // excluding the watchlist slugs USDD and Bittensor dTAO fails intake; that
-  // call belongs to whoever submits, not to this check.
-  const missing = snapshot.watchlist.filter((s) => !slugs.has(s) && !TRADED_TOKEN_SLUGS[s]);
+  const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
   if (missing.length > 0) return `the board misses ${missing.length} watchlist slug${missing.length === 1 ? '' : 's'}: ${missing.slice(0, 5).join(', ')}`;
   const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
   for (let i = 0; i < ranks.length; i++) if (ranks[i] !== i + 1) return `rank ${i + 1} is ${ranks[i]}`;

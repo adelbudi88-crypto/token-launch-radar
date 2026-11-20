@@ -119,7 +119,8 @@ function renderIntegrity() {
   $('integrity').innerHTML =
     '<span class="strip-k">Integrity — all ' + it.total_protocols + ' protocols accounted for</span>' +
     '<span><b>' + it.ranked + ' ranked</b> · ' + it.live_token + ' live-token at market value · ' + it.excluded_total + ' set aside (' + esc(reasons) + ') · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · gaps: ' + it.null_change_7d + ' missing 7d, ' + it.null_listed_at + ' missing listing date · training ' + it.n_train_raw + ' → ' + it.n_train_dedup + ' after dedup</span>' +
-    '<span class="muted">Already-traded tokens set aside (' + it.excluded_traded_tokens.length + ' — the protocol IS the token, no future token to launch): ' + esc(it.excluded_traded_tokens.join(' · ')) + '</span>';
+    '<span class="muted">Already-traded tokens set aside (' + it.excluded_traded_tokens.length + ' — the protocol IS the token, no future token to launch): ' + esc(it.excluded_traded_tokens.join(' · ')) + '</span>' +
+    '<span class="muted">On the board only because the gate\u2019s watchlist requires them — both already trade, do not farm: ' + esc(it.watchlist_traded_override.join(' · ')) + '</span>';
 }
 
 function renderOosStrip() {
@@ -201,7 +202,7 @@ function renderBoard() {
   $('rows').innerHTML = rows.map((r) =>
     '<tr data-slug="' + esc(r.slug) + '">' +
     '<td class="num"><span class="rank">' + r.rank + '</span></td>' +
-    '<td class="name"><b>' + esc(r.name) + '</b><span>' + esc(r.slug) + (watchSet.has(r.slug) ? '<span class="watch">★ watchlist</span>' : '') + '</span>' +
+    '<td class="name"><b>' + esc(r.name) + '</b>' + (r.already_traded ? ' <span class="traded">ALREADY TRADED</span>' : '') + '<span>' + esc(r.slug) + (watchSet.has(r.slug) ? '<span class="watch">★ watchlist</span>' : '') + '</span>' +
     (r.category ? '<br><span class="cat">' + esc(r.category) + '</span>' : '') + '</td>' +
     '<td class="num">' + money(r.tvl_usd) + '</td>' +
     pctCell(r.change_7d) +
@@ -270,7 +271,10 @@ function openDetail(slug) {
   $('detail').innerHTML =
     '<h2>' + esc(r.name) + '</h2>' +
     '<p class="sub">' + esc(r.slug) + (r.category ? ' · ' + esc(r.category) : '') + ' · ' + esc(chainList || 'no chain listed') + '</p>' +
-    '<span class="status">Records no token — pre-token</span> ' + verdictBadge(r.farm_verdict) +
+    (r.already_traded
+      ? '<span class="status">Already-traded token — on the board only for the gate\u2019s watchlist</span> ' + verdictBadge(r.farm_verdict) +
+        '<div class="traded-note"><b>Already traded — do not farm.</b> ' + esc(r.already_traded_note || '') + ' This row is on the board only because the gate\u2019s watchlist requires it; its token already trades, so there is no future token to launch.</div>'
+      : '<span class="status">Records no token — pre-token</span> ' + verdictBadge(r.farm_verdict)) +
     '<div class="kv">' +
     '<div><div class="k">Rank</div><div class="v">#' + r.rank + ' of ' + D.rows.length + '</div></div>' +
     '<div><div class="k">Expected value</div><div class="v">' + money(r.expected_value_usd) + '</div></div>' +
@@ -291,6 +295,7 @@ function openDetail(slug) {
     '<div><span>Gas (' + fa.tx_count + ' transactions)</span><span>− ' + money(gasTotal) + '</span></div>' +
     '<div><span>Time (' + fa.hours + 'h at $' + fa.hour_usd + '/h)</span><span>− ' + money(timeValue) + '</span></div>' +
     '<div class="tot"><span>Net farm value</span><span>' + (r.farm_net_usd < 0 ? '−' : '') + money(Math.abs(r.farm_net_usd)) + '</span></div>' +
+    (r.already_traded ? '<div><span>Verdict forced to SKIP</span><span>the token already trades — do not farm</span></div>' : '') +
     '<div><span>Deposit sized to the verdict</span><span><b>' + (r.farm_deposit_usd === 0 ? '$0 — do not deposit' : '$' + r.farm_deposit_usd) + '</b></span></div></div>' +
     '<h3>Farm plan — ' + r.farm_steps.length + ' steps</h3>' +
     '<ol class="steps">' + r.farm_steps.map((s) => {
