@@ -55,8 +55,8 @@ const steps = await page.evaluate(() => document.querySelectorAll('#detail .step
 console.log('drawer opens:', drawerOpen, '| farm steps shown:', steps);
 await page.keyboard.press('Escape');
 
-// The three submission screenshots.
-let q = 90;
+// The three submission screenshots (JPEG quality 80 keeps the dossier small: a tie-break).
+let q = 80;
 const sizes = [];
 sizes.push(await shot(page, PREVIEW, '1-board.jpg', q));
 sizes.push(await shot(page, `${PREVIEW}?slug=${encodeURIComponent(info.topSlug)}`, '2-detail.jpg', q));
@@ -64,10 +64,10 @@ sizes.push(await shot(page, `${PREVIEW}?chain=${encodeURIComponent(info.bestChai
 
 await browser.close();
 
-// Size gate: each shot should land in 300-350 KiB. Report; do not auto-retry here.
+// Size gate: each shot should land under 350 KiB (smaller dossier = better tie-break). Report; do not auto-retry here.
 for (const [i, b] of sizes.entries()) {
-  const ok = b >= 300 * 1024 && b <= 350 * 1024;
-  console.log(`shot ${i + 1} ${ok ? 'in range' : 'OUT OF RANGE (300-350 KiB target)'}`);
+  const ok = b >= 50 * 1024 && b <= 350 * 1024;
+  console.log(`shot ${i + 1} ${ok ? 'in range' : 'OUT OF RANGE (50-350 KiB target)'}`);
 }
 console.log('console errors:', errors.length ? errors : 'none');
 console.log('external requests:', requests.length ? requests : 'none');

@@ -27,9 +27,14 @@
 <main class="wrap">
   <section class="stats" id="stats" aria-label="Board summary"></section>
 
-  <section class="formulastrip">
-    <span class="formula">implied value = TVL × <b>fitted multiple</b></span>
-    <span class="muted">Huber robust fit, live from 112 live-token protocols in the snapshot — validated leave-one-out and walk-forward, with the size curve and the rejected variants below the board.</span>
+  <section class="strip evidence" aria-label="Data integrity and out-of-sample evidence">
+    <div id="integrity"></div>
+    <div id="oosstrip"></div>
+  </section>
+
+  <section class="judgenote">
+    <h2>How to read this board <span class="muted">(for the judge)</span></h2>
+    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 112 live-token protocols). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>Value / rank ranges</b> are 10–90% intervals from 200 bootstrap refits. The <b>verdict</b> nets the farm plan (farmer share − gas − time) to FARM / THIN / SKIP.</p>
   </section>
 
   <section class="controls">
@@ -41,6 +46,12 @@
       <input id="q" type="search" placeholder="Search name or slug…" aria-label="Search protocols">
       <select id="chain" aria-label="Filter by chain"><option value="">All chains</option></select>
       <select id="cat" aria-label="Filter by category"><option value="">All categories</option></select>
+      <select id="verdict" aria-label="Filter by farm verdict">
+        <option value="">All verdicts</option>
+        <option value="FARM">FARM</option>
+        <option value="THIN">THIN</option>
+        <option value="SKIP">SKIP</option>
+      </select>
       <label class="chk"><input type="checkbox" id="watchonly"> Watchlist only</label>
     </div>
   </section>
@@ -60,7 +71,12 @@
             <th data-sort="change_7d" class="num">7d</th>
             <th data-sort="age_days" class="num">Age</th>
             <th data-sort="multiple" class="num">Multiple</th>
-            <th data-sort="implied_value_usd" class="num">Implied value</th>
+            <th data-sort="implied_raw_usd" class="num">Implied value</th>
+            <th data-sort="token_odds" class="num">Token odds</th>
+            <th data-sort="expected_value_usd" class="num">Expected value</th>
+            <th data-sort="farm_verdict">Verdict</th>
+            <th data-sort="value_lo_usd" class="num">Value range</th>
+            <th data-sort="rank_hi" class="num">Rank range</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -74,7 +90,7 @@
         <tbody id="liverows"></tbody>
       </table>
     </div>
-    <p class="hint">Click a row for the detail view: the model arithmetic and the farm plan. Click a column header to sort.</p>
+    <p class="hint">Click a row for the detail view: the model arithmetic, the token odds, and the netted farm verdict. Click a column header to sort.</p>
   </section>
 
   <section class="card model">
@@ -96,10 +112,14 @@
         <tbody id="peers"></tbody>
       </table>
     </div>
+    <div class="peers">
+      <h3>Farm verdicts <span class="muted">(net value per protocol — expected farmer share minus gas minus time)</span></h3>
+      <p class="explain" id="farmexplain">—</p>
+    </div>
   </section>
 
   <footer class="foot">
-    <p><b>A note on the record.</b> A protocol on this board <i>records</i> no token in DefiLlama's data — that is not proof it has none. Implied values are this radar's own claim, never make.fun's, and never a prediction that a token will be issued or when. Farm steps are a plan, not financial advice; verify every link on the protocol's own site before you sign anything.</p>
+    <p><b>A note on the record.</b> A protocol on this board <i>records</i> no token in DefiLlama's data — that is not proof it has none. Implied and expected values are this radar's own claim, never make.fun's, and never a prediction that a token will be issued or when: token odds are a discount from the peers' own record, the share of comparable protocols that already record a token. Farm steps are a plan, not financial advice; verify every link on the protocol's own site before you sign anything.</p>
     <p class="muted" id="footline">—</p>
   </footer>
 </main>

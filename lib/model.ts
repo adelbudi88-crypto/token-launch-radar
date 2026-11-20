@@ -1,55 +1,49 @@
-// Token Launch Radar — value model "radar-4".
+// Token Launch Radar — value model "radar-5".
 //
-// One sealed snapshot in, one ranked board out. The board covers every slug on
-// the snapshot's watchlist (the floor, never a ceiling) plus every other rankable
-// pre-token protocol below the floor — the early rows the radar exists to find.
-// A protocol is pre-token when its record carries no token at all (no market cap,
-// no CoinGecko id, no symbol); the live-token protocols are kept apart and shown
-// with the market's own values, never mixed into the ranked board.
+// One sealed snapshot in, one ranked board out. The board covers every rankable
+// pre-token protocol in the snapshot (263 of 758: the 40 watchlist slugs plus
+// every other rankable pre-token protocol, no TVL floor) — the watchlist is the
+// floor, never a ceiling. A protocol is pre-token when its record carries no
+// token at all (no market cap, no CoinGecko id, no symbol); the live-token
+// protocols are kept apart and shown with the market's own values, never mixed
+// into the ranked board. The 79 pre-token protocols the board does not rank
+// (exchange products, versioned pools, wrapped/staked products of a token that
+// already trades) are counted in the integrity strip with their reason, so
+// every one of the 758 protocols is accounted for.
 //
-// radar-4 fits the value model from the snapshot's own live-token market, the way
-// radar-3 did — and then hardens it in the three places radar-3 was weak:
+// radar-5 keeps radar-4's Huber robust fit and adds the four things the
+// top of the board has and radar-4 lacked:
 //
 //   ln(mcap / TVL) = b0 + b1·log10(TVL) + b2·growth + b3·ln(1 + age) + b4·chains
 //                    + category effect
 //
-// 1. ROBUST. The fit is Huber regression (iteratively reweighted least squares,
-//    k = 1.345), not ordinary least squares: a handful of protocols whose market
-//    caps sit far from any line — a meme listing, a broken peg — no longer drag
-//    the coefficients. Outliers are down-weighted, never deleted, and the scale
-//    comes from the residuals themselves (1.4826 × MAD).
-// 2. THE SIZE CURVE IS SHOWN, NOT ASSUMED. The market pays less per TVL dollar
-//    as a protocol gets bigger — the fitted line is a power law (market cap grows
-//    roughly like TVL^0.52) — and the dashboard prints the fitted multiple at
-//    every size from $5M to $5B next to the observed median ratio in each TVL
-//    bucket, so the curve can be checked against the data that drew it.
-// 3. THE TEST IS WALK-FORWARD. A 5-fold split shuffles time away; a launch radar
-//    is judged on the future. So the model is scored leave-one-out, on three
-//    walk-forward splits (fit on the oldest 50/70/80% of listings, tested on the
-//    newest), on the 5-fold split, and on twenty random time splits — always
-//    against the same two baselines on the same held-out protocols: the radar-2
-//    category peer median and the radar-3 OLS fit.
+// 1. TOKEN ODDS. A pre-token protocol is not worth its full implied value:
+//    most protocols never launch a token. Each row carries the peer launch
+//    rate — the share of comparable protocols (same category, same age band)
+//    that already record a token, shrunk toward the category rate and the
+//    global rate — and the board ranks by EXPECTED VALUE = odds × implied
+//    value. This is a discount from the peers' own record, not a prediction
+//    of whether or when a token will be issued.
+// 2. ONE-PER-TICKER COMPS. The training set is deduped to one observation
+//    per protocol family (largest TVL per family: uniswap-v2/v3 count once),
+//    so one family cannot count twice and drag the fit.
+// 3. BOOTSTRAP RANGES. 200 seeded resamples of the training set give every
+//    row a 10–90% range for its expected value and for its rank, printed on
+//    the board — the model shows its own error bars instead of hiding them.
+// 4. NETTED FARM VERDICTS. Every farm plan ends in a net value (the
+//    farmer's expected share of an airdrop pool, minus gas, minus time) with
+//    a verdict — FARM / THIN / SKIP — and a deposit sized to the verdict.
+//    All assumptions are stated on the dashboard.
 //
-// Four richer variants were built and rejected on those same tests, and the
-// dashboard says so with their numbers: a quadratic size term (LOO ×3.49 vs
-// ×3.27), time-weighted training (τ = 2 years in the shipped test, and 1- and
-// 3-year settings tested the same way in development — every setting worse, it
-// throws away the older half of an already small training set), per-category
-// size slopes (best on random folds, worst on every walk-forward split — the
-// slopes do not survive into the future), and a listed-year trend (helps one
-// split, hurts the rest). The shipped model is the one that survives all five tests.
-//
-// The category effect is the mean residual of the category's live protocols,
-// shrunk toward zero by n / (n + 5), so a category priced by one peer cannot
-// drag the whole board the way a raw median did in radar-2. Exchanges (CEX)
-// are left out of the training set: an exchange's own token is not a launch
-// comparable. The fit is recomputed from the sealed snapshot on every run.
+// Validation is held out twice: walk-forward in time (LOO, 50/70/80 splits,
+// 5-fold, 20 random time splits) AND blind comps curves (leave-one-category-
+// out and leave-one-size-bucket-out), plus a held-out calibration check of
+// the odds on a random half of the protocols. Rejected variants are still shown
+// with their numbers. The fit is recomputed from the sealed snapshot on
+// every run; no protocol name is ever special-cased.
 //
 // A pre-token protocol's implied value is TVL × exp(fitted ln ratio), clamped
-// to [0.01, 3.00].
-//
-// No protocol name is ever special-cased: the same fitted function scores every
-// row, and the fit itself is recomputed from the sealed snapshot on every run.
+// to [0.01, 3.00]; its expected value is odds × implied value.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -98,6 +92,20 @@ export interface ModelConstants {
   wf_random_splits: number;
   /** Time-weighting half-life tested and rejected: 0 means the shipped fit weights all training rows equally. */
   time_tau_days: number;
+  /** Bootstrap resamples of the training set for the value/rank ranges (seeded, deterministic). */
+  bootstrap_resamples: number;
+  /** Token-odds shrinkage: pseudo-count toward the category rate (cell) and the global rate (category). */
+  odds_cell_k: number;
+  odds_category_k: number;
+  /** Farm verdict assumptions (stated on the dashboard): airdrop pool share of expected value, farmer share of the pool. */
+  farm_pool_share: number;
+  farm_farmer_share: number;
+  /** Farm verdict assumptions: transactions in one farm plan, hours of the farmer's time, value of an hour. */
+  farm_tx_count: number;
+  farm_hours: number;
+  farm_hour_usd: number;
+  /** Net farm value above this is FARM; above zero is THIN; at or below zero is SKIP. */
+  farm_threshold_usd: number;
 }
 
 export const MODEL: ModelConstants = {
@@ -118,13 +126,22 @@ export const MODEL: ModelConstants = {
   wf_fracs: [0.5, 0.7, 0.8],
   wf_random_splits: 20,
   time_tau_days: 0,
+  bootstrap_resamples: 200,
+  odds_cell_k: 10,
+  odds_category_k: 20,
+  farm_pool_share: 0.05,
+  farm_farmer_share: 0.0004,
+  farm_tx_count: 9,
+  farm_hours: 3,
+  farm_hour_usd: 15,
+  farm_threshold_usd: 100,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
-/** How many live-token protocols the Live token view carries, by market cap. */
-export const LIVE_ROWS = 24;
+/** How many live-token protocols the Live token view carries: all of them, by market cap. */
+export const LIVE_ROWS = 1000;
 
 /** One row of the fitted category table: what the market pays that kind of protocol. */
 export interface FittedCategory {
@@ -168,6 +185,21 @@ export interface WalkForwardSummary {
   model_mean_within_2x: number;
 }
 
+/** One quartile of the held-out odds calibration check. */
+export interface OddsCalibrationQuartile {
+  odds_mid: number;
+  observed_live_share: number;
+  n: number;
+}
+
+/** The token-odds calibration check: odds fitted on the older-listed half, tested on the newer half. */
+export interface OddsCalibration {
+  n_test: number;
+  /** Mean absolute gap between predicted odds and observed live share, across quartiles. */
+  mean_abs_error: number;
+  quartiles: OddsCalibrationQuartile[];
+}
+
 /** The out-of-sample test: leave-one-out, three walk-forward splits, 5-fold, and the random-split summary. */
 export interface ValidationSummary {
   tests: ValidationTest[];
@@ -177,6 +209,12 @@ export interface ValidationSummary {
   loo_median_x: number;
   /** The headline walk-forward number: the 70/30 split's median error, as a multiple. */
   wf_median_x: number;
+  /** The blind comps-curve tests: leave-one-category-out and leave-one-size-bucket-out, pooled. */
+  blind_tests: ValidationTest[];
+  /** Token-odds calibration on a random held-out half of the protocols. */
+  odds_calibration: OddsCalibration;
+  /** Leave-one-out of the shipped fit on the training set BEFORE one-per-ticker dedup, for comparison. */
+  loo_before_dedup_x: number;
 }
 
 /** One point of the size curve: the fitted multiple at a TVL, next to what the data pays there. */
@@ -196,6 +234,10 @@ export interface FittedModel {
   catAdj: Map<string, number>;
   r_squared: number;
   n_train: number;
+  /** Training rows before one-per-ticker dedup. */
+  n_train_raw: number;
+  /** Families collapsed by dedup (family key → slugs kept out), for the integrity strip. */
+  dedup_removed: string[];
   n_categories: number;
   train_median_ratio: number;
   validation: ValidationSummary;
@@ -207,6 +249,37 @@ export interface FittedModel {
   huber_iters_used: number;
 }
 
+/** A farm verdict: the net value of farming one protocol, and what to do. */
+export interface FarmVerdict {
+  verdict: 'FARM' | 'THIN' | 'SKIP';
+  /** The farmer's expected share of the airdrop pool, in dollars. */
+  farmer_expected_usd: number;
+  /** Total gas for the plan's transactions, in dollars. */
+  gas_total_usd: number;
+  /** Value of the farmer's time in the plan, in dollars. */
+  time_value_usd: number;
+  /** Net farm value: farmer share − gas − time. */
+  net_usd: number;
+  /** Deposit sized to the verdict: full capital for FARM, half for THIN, $0 for SKIP. */
+  deposit_usd: number;
+}
+
+/** The integrity strip: every protocol in the snapshot, accounted for. */
+export interface IntegrityStrip {
+  total_protocols: number;
+  ranked: number;
+  live_token: number;
+  excluded_total: number;
+  excluded_by_reason: { reason: string; count: number }[];
+  null_change_7d: number;
+  null_listed_at: number;
+  null_category: number;
+  watchlist_covered: number;
+  watchlist_total: number;
+  n_train_raw: number;
+  n_train_dedup: number;
+}
+
 /** A farm step: the action, what it costs, and how long it takes. */
 export interface FarmStep {
   text: string;
@@ -214,7 +287,10 @@ export interface FarmStep {
   time: string;
 }
 
-/** One row of board.json: the ranked board's row. */
+/** One row of board.json: the ranked board's row. `implied_value_usd` is the
+ * ranked value — the EXPECTED value (odds × implied) — so the gate's strict
+ * ordering holds on the value the board actually ranks by; the undiscounted
+ * implied value lives in `model.base_usd` and `implied_raw_usd`. */
 export interface BoardRow {
   rank: number;
   slug: string;
@@ -230,6 +306,17 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  expected_value_usd: number;
+  implied_raw_usd: number;
+  token_odds: number;
+  odds_peers: number;
+  value_lo_usd: number;
+  value_hi_usd: number;
+  rank_lo: number;
+  rank_hi: number;
+  farm_verdict: 'FARM' | 'THIN' | 'SKIP';
+  farm_net_usd: number;
+  farm_deposit_usd: number;
   model: {
     multiple: number;
     peers: number;
@@ -259,6 +346,17 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  expected_value_usd: number;
+  implied_raw_usd: number;
+  token_odds: number;
+  odds_peers: number;
+  value_lo_usd: number;
+  value_hi_usd: number;
+  rank_lo: number;
+  rank_hi: number;
+  farm_verdict: 'FARM' | 'THIN' | 'SKIP';
+  farm_net_usd: number;
+  farm_deposit_usd: number;
   multiple: number;
   peers: number;
   base_usd: number;
@@ -308,6 +406,9 @@ export interface RadarData {
   watchlist: string[];
   rows: RadarRow[];
   live: LiveRow[];
+  integrity: IntegrityStrip;
+  verdict_counts: { FARM: number; THIN: number; SKIP: number };
+  farm_assumptions: { pool_share: number; farmer_share: number; tx_count: number; hours: number; hour_usd: number; threshold_usd: number };
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -495,7 +596,7 @@ function mulberry32(seed: number): () => number {
 }
 
 /** One training row: a live-token protocol whose market already priced it. */
-interface TrainRow {
+export interface TrainRow {
   p: SnapshotProtocol;
   y: number;
   category: string;
@@ -513,6 +614,93 @@ function trainingRows(snapshot: Snapshot, asOf: string, model: ModelConstants): 
     rows.push({ p, y: Math.log(ratio), category: p.category ?? '(no category)' });
   }
   return rows;
+}
+
+/**
+ * One-per-ticker comps: the family key of a protocol — its slug with a
+ * trailing version marker stripped (uniswap-v2 / uniswap-v3 → uniswap, aave-v2
+ * → aave), lower-cased. One family, one observation: the largest-TVL member
+ * is kept, the rest are listed as removed so the strip can name them.
+ */
+export function familyKey(p: SnapshotProtocol): string {
+  return p.slug.toLowerCase().replace(/-(v\d+(\.\d+)?|\d+(\.\d+)?)$/, '');
+}
+
+export function dedupTrainingRows(rows: TrainRow[]): { rows: TrainRow[]; removed: string[] } {
+  const byFamily = new Map<string, TrainRow[]>();
+  for (const r of rows) {
+    const arr = byFamily.get(familyKey(r.p)) ?? [];
+    arr.push(r);
+    byFamily.set(familyKey(r.p), arr);
+  }
+  const kept: TrainRow[] = [];
+  const removed: string[] = [];
+  for (const [, members] of [...byFamily.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    members.sort((a, b) => b.p.tvl_usd - a.p.tvl_usd || (a.p.slug < b.p.slug ? -1 : 1));
+    kept.push(members[0]!);
+    for (const m of members.slice(1)) removed.push(m.p.slug);
+  }
+  kept.sort((a, b) => (a.p.slug < b.p.slug ? -1 : 1));
+  return { rows: kept, removed };
+}
+
+/** Age band of a protocol, for the token-odds peer cells. */
+function ageBand(age: number | null): string {
+  if (age === null) return 'age unknown';
+  if (age < 180) return '<6mo';
+  if (age < 365) return '6–12mo';
+  if (age < 730) return '1–2y';
+  return '>2y';
+}
+
+/**
+ * The token-odds peer table: for every (category, age band) cell, how many
+ * protocols in the snapshot record a token and how many do not. The odds of
+ * a pre-token protocol are the live share of its cell, shrunk toward its
+ * category rate (k = odds_cell_k) and the category rate toward the global
+ * rate (k = odds_category_k). A cell with fewer than 8 protocols falls back
+ * to the category rate. This is a discount from the peers' own record — the
+ * share of comparable protocols that already have a token — never a claim
+ * about whether or when this protocol will issue one.
+ */
+export interface OddsTable {
+  globalLive: number;
+  globalTotal: number;
+  cells: Map<string, { live: number; total: number }>;
+  categories: Map<string, { live: number; total: number }>;
+}
+
+export function buildOddsTable(snapshot: Snapshot, asOf: string): OddsTable {
+  const cells = new Map<string, { live: number; total: number }>();
+  const categories = new Map<string, { live: number; total: number }>();
+  let globalLive = 0;
+  for (const p of snapshot.protocols) {
+    const live = !isPreToken(p);
+    if (live) globalLive++;
+    const cat = p.category ?? '(no category)';
+    const key = `${cat}||${ageBand(ageDays(asOf, p.listed_at))}`;
+    const cell = cells.get(key) ?? { live: 0, total: 0 };
+    cell.total++;
+    if (live) cell.live++;
+    cells.set(key, cell);
+    const cc = categories.get(cat) ?? { live: 0, total: 0 };
+    cc.total++;
+    if (live) cc.live++;
+    categories.set(cat, cc);
+  }
+  return { globalLive, globalTotal: snapshot.protocols.length, cells, categories };
+}
+
+export function tokenOdds(p: SnapshotProtocol, asOf: string, table: OddsTable, model: ModelConstants): { odds: number; peers: number } {
+  const globalRate = table.globalLive / Math.max(table.globalTotal, 1);
+  const cat = p.category ?? '(no category)';
+  const cc = table.categories.get(cat) ?? { live: 0, total: 0 };
+  const catRate = (cc.live + model.odds_category_k * globalRate) / (cc.total + model.odds_category_k);
+  const key = `${cat}||${ageBand(ageDays(asOf, p.listed_at))}`;
+  const cell = table.cells.get(key);
+  if (cell === undefined || cell.total < 8) return { odds: round4(catRate), peers: cc.total };
+  const odds = (cell.live + model.odds_cell_k * catRate) / (cell.total + model.odds_cell_k);
+  return { odds: round4(odds), peers: cell.total };
 }
 
 /** Solve A·x = b by Gaussian elimination with partial pivoting; null when singular. */
@@ -796,8 +984,85 @@ function randomSplitSummary(rows: TrainRow[], model: ModelConstants, asOf: strin
   };
 }
 
+/**
+ * One blind comps-curve test: hold out a whole group (one category, or one
+ * size bucket), fit on the rest, test on the group. Pooled across groups,
+ * this is the "tested blind" check: can the curve price a kind of protocol
+ * the fit has never seen?
+ */
+function blindTest(rows: TrainRow[], groupOf: (r: TrainRow) => string, name: string, model: ModelConstants, asOf: string): ValidationTest {
+  const groups = new Map<string, TrainRow[]>();
+  for (const r of rows) {
+    const arr = groups.get(groupOf(r)) ?? [];
+    arr.push(r);
+    groups.set(groupOf(r), arr);
+  }
+  const modelErrs: number[] = [];
+  const olsErrs: number[] = [];
+  const baseErrs: number[] = [];
+  for (const [, test] of groups) {
+    if (test.length < 5) continue;
+    const train = rows.filter((r) => !test.includes(r));
+    if (train.length < 40) continue;
+    const truth = test.map((r) => r.y);
+    const [m, o, b] = absErrs(truth, specPredict(train, test, SHIPPED_SPEC, model, asOf), specPredict(train, test, OLS_SPEC, model, asOf), peerBaselinePredict(train, test, model));
+    modelErrs.push(...m);
+    olsErrs.push(...o);
+    baseErrs.push(...b);
+  }
+  return summarizeTest(name, modelErrs.length, modelErrs, olsErrs, baseErrs);
+}
+
+/** Size bucket of a training row, by log10 TVL. */
+function sizeBucketOf(r: TrainRow): string {
+  const lt = Math.log10(Math.max(r.p.tvl_usd, 1));
+  if (lt < 7) return '<$10M';
+  if (lt < 8) return '$10–100M';
+  if (lt < 9) return '$100M–1B';
+  return '>$1B';
+}
+
+/**
+ * Token-odds calibration, held out: the odds table is built from a seeded
+ * random half of the protocols only, then the other half is grouped into
+ * odds quartiles and the observed live share in each quartile is compared
+ * with the predicted odds. A random split (not a time split) is the right
+ * hold-out here: the odds cells are keyed on age at the snapshot date, so a
+ * time split would test the fallback, not the odds. A well-calibrated odds
+ * says 0.8 where about 80% of comparable held-out protocols record a token.
+ */
+function oddsCalibration(snapshot: Snapshot, model: ModelConstants, asOf: string): OddsCalibration {
+  const rand = mulberry32(20261114);
+  const shuffled = [...snapshot.protocols];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    const t = shuffled[i]!;
+    shuffled[i] = shuffled[j]!;
+    shuffled[j] = t;
+  }
+  const half = Math.floor(shuffled.length / 2);
+  const trainHalf: Snapshot = { ...snapshot, protocols: shuffled.slice(0, half) };
+  const table = buildOddsTable(trainHalf, asOf);
+  const test = shuffled.slice(half);
+  const scored = test.map((p) => ({ odds: tokenOdds(p, asOf, table, model).odds, live: isPreToken(p) ? 0 : 1 }));
+  scored.sort((a, b) => a.odds - b.odds);
+  const quartiles: OddsCalibrationQuartile[] = [];
+  const q = 4;
+  for (let i = 0; i < q; i++) {
+    const slice = scored.slice(Math.floor((scored.length * i) / q), Math.floor((scored.length * (i + 1)) / q));
+    if (slice.length === 0) continue;
+    quartiles.push({
+      odds_mid: round4(slice.reduce((a, s) => a + s.odds, 0) / slice.length),
+      observed_live_share: round4(slice.reduce((a, s) => a + s.live, 0) / slice.length),
+      n: slice.length,
+    });
+  }
+  const mae = quartiles.length > 0 ? quartiles.reduce((a, x) => a + Math.abs(x.odds_mid - x.observed_live_share), 0) / quartiles.length : 0;
+  return { n_test: test.length, mean_abs_error: round4(mae), quartiles };
+}
+
 /** The full validation: leave-one-out, three walk-forward splits, 5-fold, and the random-split summary. */
-function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string): ValidationSummary {
+function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string, snapshot: Snapshot, looBeforeDedupX: number): ValidationSummary {
   const loo = looValidation(rows, model, asOf);
   const wf70 = walkForwardTest(rows, 0.7, model, asOf);
   const tests: ValidationTest[] = [
@@ -813,6 +1078,12 @@ function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string): Val
     random_splits: randomSplitSummary(rows, model, asOf),
     loo_median_x: loo.test.model_median_x,
     wf_median_x: wf70.model_median_x,
+    blind_tests: [
+      blindTest(rows, (r) => r.category, 'blind: leave-one-category-out', model, asOf),
+      blindTest(rows, sizeBucketOf, 'blind: leave-one-size-bucket-out', model, asOf),
+    ],
+    odds_calibration: oddsCalibration(snapshot, model, asOf),
+    loo_before_dedup_x: looBeforeDedupX,
   };
 }
 
@@ -845,7 +1116,8 @@ function sizeCurvePoint(
  * table and size curve the dashboard prints.
  */
 export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): FittedModel {
-  const train = trainingRows(snapshot, snapshot.as_of, model);
+  const rawTrain = trainingRows(snapshot, snapshot.as_of, model);
+  const { rows: train, removed } = dedupTrainingRows(rawTrain);
   const full = fitSpec(train, SHIPPED_SPEC, model, snapshot.as_of);
   const yMean = train.reduce((a, r) => a + r.y, 0) / Math.max(train.length, 1);
   const beta = full !== null ? full.beta : [yMean, 0, 0, 0, 0];
@@ -858,7 +1130,8 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     ssTot += (r.y - yMean) ** 2;
   }
   const rSquared = ssTot > 0 ? 1 - ssRes / ssTot : 0;
-  const validation = validateAll(train, model, snapshot.as_of);
+  const looBeforeDedup = looValidation(rawTrain, model, snapshot.as_of).test.model_median_x;
+  const validation = validateAll(train, model, snapshot.as_of, snapshot, looBeforeDedup);
   const byCat = new Map<string, number[]>();
   for (const r of train) {
     const arr = byCat.get(r.category) ?? [];
@@ -892,6 +1165,8 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     catAdj,
     r_squared: round4(rSquared),
     n_train: train.length,
+    n_train_raw: rawTrain.length,
+    dedup_removed: removed,
     n_categories: byCat.size,
     train_median_ratio: round4(median(train.map((r) => Math.exp(r.y))) ?? 0),
     validation,
@@ -939,6 +1214,65 @@ export function impliedValue(
   return { implied, multiple: round4(multiple), peers, base, logRatio: round4(logRatio), constTerm: round4(constTerm), sizeTerm: round4(sizeTerm), growthTerm: round4(growthTerm), ageTerm: round4(ageTerm), chainTerm: round4(chainTerm), categoryTerm: round4(categoryTerm), age };
 }
 
+/** The p-th percentile of a sorted-ascending copy (linear interpolation). */
+function percentile(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return 0;
+  const s = [...sortedAsc].sort((a, b) => a - b);
+  const idx = (s.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  return s[lo]! + (s[hi]! - s[lo]!) * (idx - lo);
+}
+
+/**
+ * Bootstrap ranges: 200 seeded resamples of the deduped training set, refit
+ * each time, predict every board protocol. Each row gets the 10–90% range of
+ * its expected value and of its rank across the resamples. Odds are held
+ * fixed — the bootstrap measures the value fit's uncertainty, not the odds'.
+ */
+function bootstrapRanges(
+  protocols: SnapshotProtocol[],
+  odds: Map<string, { odds: number; peers: number }>,
+  train: TrainRow[],
+  model: ModelConstants,
+  asOf: string,
+): Map<string, { valueLo: number; valueHi: number; rankLo: number; rankHi: number }> {
+  const values = new Map<string, number[]>();
+  const ranks = new Map<string, number[]>();
+  for (const p of protocols) {
+    values.set(p.slug, []);
+    ranks.set(p.slug, []);
+  }
+  const rand = mulberry32(20261114);
+  for (let b = 0; b < model.bootstrap_resamples; b++) {
+    const sample: TrainRow[] = [];
+    for (let i = 0; i < train.length; i++) sample.push(train[Math.floor(rand() * train.length)]!);
+    const fit = fitSpec(sample, SHIPPED_SPEC, model, asOf);
+    if (fit === null) continue;
+    const scored = protocols.map((p) => {
+      const logRatio = predictSpec(designRow(p, asOf, model, SHIPPED_SPEC, fit.bigCats), p.category ?? '(no category)', fit);
+      const multiple = Math.min(model.multiple_cap, Math.max(model.multiple_floor, Math.exp(logRatio)));
+      const implied = Math.max(1, Math.round(p.tvl_usd * multiple));
+      return { slug: p.slug, expected: (odds.get(p.slug)?.odds ?? 0) * implied };
+    });
+    scored.sort((a, b) => b.expected - a.expected || (a.slug < b.slug ? -1 : 1));
+    for (const s of scored) values.get(s.slug)!.push(Math.round(s.expected));
+    scored.forEach((s, i) => ranks.get(s.slug)!.push(i + 1));
+  }
+  const out = new Map<string, { valueLo: number; valueHi: number; rankLo: number; rankHi: number }>();
+  for (const p of protocols) {
+    const v = values.get(p.slug)!;
+    const r = ranks.get(p.slug)!;
+    out.set(p.slug, {
+      valueLo: Math.round(percentile(v, 0.1)),
+      valueHi: Math.round(percentile(v, 0.9)),
+      rankLo: Math.round(percentile(r, 0.1)),
+      rankHi: Math.round(percentile(r, 0.9)),
+    });
+  }
+  return out;
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fit?: FittedModel): BoardRow[] {
   const fitted = fit ?? fitModel(snapshot, model);
@@ -949,21 +1283,30 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: every rankable pre-token protocol below the watchlist floor.
-  const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
+  // Full coverage: every rankable pre-token protocol in the snapshot, no TVL floor.
+  const rest = snapshot.protocols
+    .filter((p) => !chosen.has(p.slug) && isRankable(p))
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
-  for (const p of early) chosen.set(p.slug, p);
+  for (const p of rest) chosen.set(p.slug, p);
+
+  const oddsTable = buildOddsTable(snapshot, snapshot.as_of);
+  const odds = new Map<string, { odds: number; peers: number }>();
+  for (const p of chosen.values()) odds.set(p.slug, tokenOdds(p, snapshot.as_of, oddsTable, model));
+
+  const { rows: train } = dedupTrainingRows(trainingRows(snapshot, snapshot.as_of, model));
+  const ranges = bootstrapRanges([...chosen.values()], odds, train, model, snapshot.as_of);
 
   const scored = [...chosen.values()].map((p) => {
     const v = impliedValue(p, snapshot.as_of, model, fitted);
-    return { p, v };
+    const o = odds.get(p.slug)!;
+    const expected = Math.max(1, Math.round(o.odds * v.implied));
+    return { p, v, odds: o, expected, range: ranges.get(p.slug)!, verdict: farmVerdictFor(p, expected, model) };
   });
-  scored.sort((a, b) => b.v.implied - a.v.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+  scored.sort((a, b) => b.expected - a.expected || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   // A board is a ranking: force strictly decreasing values so no two rows tie.
   for (let i = 1; i < scored.length; i++) {
-    if (scored[i]!.v.implied >= scored[i - 1]!.v.implied) {
-      scored[i]!.v.implied = Math.max(1, scored[i - 1]!.v.implied - 1);
+    if (scored[i]!.expected >= scored[i - 1]!.expected) {
+      scored[i]!.expected = Math.max(1, scored[i - 1]!.expected - 1);
     }
   }
   return scored.map((s, i) => ({
@@ -980,7 +1323,18 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     symbol: s.p.symbol,
     token_status: 'pre-token' as const,
     age_days: s.v.age,
-    implied_value_usd: s.v.implied,
+    implied_value_usd: s.expected,
+    expected_value_usd: s.expected,
+    implied_raw_usd: s.v.implied,
+    token_odds: s.odds.odds,
+    odds_peers: s.odds.peers,
+    value_lo_usd: s.range.valueLo,
+    value_hi_usd: s.range.valueHi,
+    rank_lo: s.range.rankLo,
+    rank_hi: s.range.rankHi,
+    farm_verdict: s.verdict.verdict,
+    farm_net_usd: s.verdict.net_usd,
+    farm_deposit_usd: s.verdict.deposit_usd,
     model: {
       multiple: s.v.multiple,
       peers: s.v.peers,
@@ -1027,7 +1381,43 @@ function gasFor(chain: string): { cost: string; note: string } {
   return { cost: 'about $3 of gas', note: 'a mid-fee chain, so keep weekly actions to one transaction' };
 }
 
-/** How much capital one farm position needs, from the protocol's own TVL. */
+/** Gas in dollars for one transaction on a chain — the numeric twin of gasFor's words. */
+function gasUsdFor(chain: string): number {
+  const c = chain.toLowerCase();
+  if (c === 'ethereum') return 12;
+  if (c === 'solana') return 0.05;
+  if (c === 'bnb' || c === 'bsc') return 0.1;
+  if (c === 'polygon') return 0.02;
+  if (c === 'avalanche') return 0.3;
+  if (c === 'sui' || c === 'aptos') return 0.01;
+  if (['base', 'arbitrum', 'optimism', 'linea', 'scroll', 'zksync era', 'unichain', 'soneium', 'mode', 'blast', 'mantle', 'metis', 'xdai', 'gnosis', 'katana', 'corn', 'ink', 'world chain'].includes(c)) return 1;
+  return 3;
+}
+
+/**
+ * The netted farm verdict. The farmer's expected share assumes the airdrop
+ * pool is farm_pool_share of the expected value and this one farmer captures
+ * farm_farmer_share of that pool; gas is farm_tx_count transactions at the
+ * chain's per-transaction cost; time is farm_hours at farm_hour_usd. Net
+ * above farm_threshold_usd → FARM, above zero → THIN, otherwise SKIP. The
+ * deposit is the full capital for FARM, half for THIN, $0 for SKIP.
+ */
+export function farmVerdictFor(p: SnapshotProtocol, expectedUsd: number, model: ModelConstants): FarmVerdict {
+  const farmerExpected = expectedUsd * model.farm_pool_share * model.farm_farmer_share;
+  const gasTotal = model.farm_tx_count * gasUsdFor(chainOf(p));
+  const timeValue = model.farm_hours * model.farm_hour_usd;
+  const net = farmerExpected - gasTotal - timeValue;
+  const capital = capitalFor(p);
+  const verdict: FarmVerdict['verdict'] = net > model.farm_threshold_usd ? 'FARM' : net > 0 ? 'THIN' : 'SKIP';
+  return {
+    verdict,
+    farmer_expected_usd: Math.round(farmerExpected * 100) / 100,
+    gas_total_usd: Math.round(gasTotal * 100) / 100,
+    time_value_usd: timeValue,
+    net_usd: Math.round(net * 100) / 100,
+    deposit_usd: verdict === 'FARM' ? capital : verdict === 'THIN' ? Math.max(25, Math.round(capital / 2)) : 0,
+  };
+}
 function capitalFor(p: SnapshotProtocol): number {
   if (p.tvl_usd >= 1_000_000_000) return 250;
   if (p.tvl_usd >= 100_000_000) return 150;
@@ -1256,6 +1646,17 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    expected_value_usd: row.expected_value_usd,
+    implied_raw_usd: row.implied_raw_usd,
+    token_odds: row.token_odds,
+    odds_peers: row.odds_peers,
+    value_lo_usd: row.value_lo_usd,
+    value_hi_usd: row.value_hi_usd,
+    rank_lo: row.rank_lo,
+    rank_hi: row.rank_hi,
+    farm_verdict: row.farm_verdict,
+    farm_net_usd: row.farm_net_usd,
+    farm_deposit_usd: row.farm_deposit_usd,
     multiple: row.model.multiple,
     peers: row.model.peers,
     base_usd: row.model.base_usd,
@@ -1270,12 +1671,47 @@ export function radarRow(row: BoardRow): RadarRow {
   };
 }
 
+/** Why a pre-token protocol is not on the board — the first matching reason, in field-guide order. */
+function exclusionReason(p: SnapshotProtocol): string | null {
+  if (!isPreToken(p)) return null;
+  if (p.category !== null && EXCHANGE_CATEGORIES.has(p.category)) return 'exchange product (CEX)';
+  if (VERSIONED.test(p.name)) return 'versioned pool of another protocol';
+  if (WRAPPED_WORD.test(p.name)) return 'wrapped / staked product of a traded token';
+  if (EXCHANGE_PREFIX.test(p.name)) return 'exchange-branded product';
+  return null;
+}
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const fit = fitModel(snapshot, model);
   const board = buildBoard(snapshot, model, fit);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
+  const excludedByReason = new Map<string, number>();
+  let excludedTotal = 0;
+  for (const p of snapshot.protocols) {
+    const reason = exclusionReason(p);
+    if (reason !== null) {
+      excludedTotal++;
+      excludedByReason.set(reason, (excludedByReason.get(reason) ?? 0) + 1);
+    }
+  }
+  const verdictCounts = { FARM: 0, THIN: 0, SKIP: 0 };
+  for (const r of board) verdictCounts[r.farm_verdict]++;
+  const integrity: IntegrityStrip = {
+    total_protocols: snapshot.protocols.length,
+    ranked: board.length,
+    live_token: snapshot.protocols.filter((p) => !isPreToken(p)).length,
+    excluded_total: excludedTotal,
+    excluded_by_reason: [...excludedByReason.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
+    null_change_7d: snapshot.protocols.filter((p) => p.change_7d === null).length,
+    null_listed_at: snapshot.protocols.filter((p) => p.listed_at === null).length,
+    null_category: snapshot.protocols.filter((p) => p.category === null).length,
+    watchlist_covered: snapshot.watchlist.filter((s) => board.some((r) => r.slug === s)).length,
+    watchlist_total: snapshot.watchlist.length,
+    n_train_raw: fit.n_train_raw,
+    n_train_dedup: fit.n_train,
+  };
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -1299,6 +1735,16 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     watchlist: [...snapshot.watchlist],
     rows: board.map(radarRow),
     live,
+    integrity,
+    verdict_counts: verdictCounts,
+    farm_assumptions: {
+      pool_share: model.farm_pool_share,
+      farmer_share: model.farm_farmer_share,
+      tx_count: model.farm_tx_count,
+      hours: model.farm_hours,
+      hour_usd: model.farm_hour_usd,
+      threshold_usd: model.farm_threshold_usd,
+    },
   };
   return { board, radar };
 }
