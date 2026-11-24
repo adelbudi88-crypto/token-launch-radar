@@ -34,7 +34,7 @@
 
   <section class="judgenote">
     <h2>How to read this board <span class="muted">(for the judge)</span></h2>
-    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 112 live-token protocols). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>Value / rank ranges</b> are 10–90% intervals from 200 bootstrap refits. The <b>verdict</b> nets the farm plan (farmer share − gas − time) to FARM / THIN / SKIP.</p>
+    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 108 live-token protocols). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>Growth is winsorized</b> to the range the training set actually saw (−40.1% to +2.7% a week): a +4448% week counts as +2.7%, so no row's value is a spike the fit never saw. <b>Value / rank ranges</b> are 10–90% intervals from 200 bootstrap refits. The <b>verdict</b> nets the farm plan (farmer share − gas over the whole hold − time) to FARM / THIN / SKIP, and <b>net per $100</b> separates two FARM rows.</p>
   </section>
 
   <section class="controls">
@@ -75,6 +75,7 @@
             <th data-sort="token_odds" class="num">Token odds</th>
             <th data-sort="expected_value_usd" class="num">Expected value</th>
             <th data-sort="farm_verdict">Verdict</th>
+            <th data-sort="farm_net_per_100_usd" class="num">Net / $100</th>
             <th data-sort="value_lo_usd" class="num">Value range</th>
             <th data-sort="rank_hi" class="num">Rank range</th>
           </tr>

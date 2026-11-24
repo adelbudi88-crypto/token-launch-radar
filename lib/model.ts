@@ -1,44 +1,61 @@
-// Token Launch Radar — value model "radar-5".
+// Token Launch Radar — value model "radar-6".
 //
 // One sealed snapshot in, one ranked board out. The board covers every rankable
-// pre-token protocol in the snapshot (263 of 758: the 40 watchlist slugs plus
+// pre-token protocol in the snapshot (254 of 758: the 40 watchlist slugs plus
 // every other rankable pre-token protocol, no TVL floor) — the watchlist is the
 // floor, never a ceiling. A protocol is pre-token when its record carries no
 // token at all (no market cap, no CoinGecko id, no symbol); the live-token
 // protocols are kept apart and shown with the market's own values, never mixed
-// into the ranked board. The 79 pre-token protocols the board does not rank
-// (exchange products, versioned pools, wrapped/staked products of a token that
-// already trades) are counted in the integrity strip with their reason, so
-// every one of the 758 protocols is accounted for.
+// into the ranked board. The 87 pre-token protocols the board does not rank
+// (exchange products, wrapped/staked products of a token that already trades)
+// are counted in the integrity strip with their reason, and one versioned
+// family is merged (Aera V2 folded into Aera V3), so every one of the 758
+// protocols is accounted for.
 //
-// radar-5 keeps radar-4's Huber robust fit and adds the four things the
-// top of the board has and radar-4 lacked:
+// radar-6 keeps radar-5's Huber robust fit, token odds, one-per-ticker comps,
+// bootstrap ranges and netted farm verdicts, and fixes the four things the
+// deep review of radar-5 found:
 //
 //   ln(mcap / TVL) = b0 + b1·log10(TVL) + b2·growth + b3·ln(1 + age) + b4·chains
 //                    + category effect
 //
-// 1. TOKEN ODDS. A pre-token protocol is not worth its full implied value:
-//    most protocols never launch a token. Each row carries the peer launch
-//    rate — the share of comparable protocols (same category, same age band)
-//    that already record a token, shrunk toward the category rate and the
-//    global rate — and the board ranks by EXPECTED VALUE = odds × implied
-//    value. This is a discount from the peers' own record, not a prediction
-//    of whether or when a token will be issued.
-// 2. ONE-PER-TICKER COMPS. The training set is deduped to one observation
-//    per protocol family (largest TVL per family: uniswap-v2/v3 count once),
-//    so one family cannot count twice and drag the fit.
-// 3. BOOTSTRAP RANGES. 200 seeded resamples of the training set give every
-//    row a 10–90% range for its expected value and for its rank, printed on
-//    the board — the model shows its own error bars instead of hiding them.
-// 4. NETTED FARM VERDICTS. Every farm plan ends in a net value (the
-//    farmer's expected share of an airdrop pool, minus gas, minus time) with
-//    a verdict — FARM / THIN / SKIP — and a deposit sized to the verdict.
-//    All assumptions are stated on the dashboard.
+// 1. GROWTH IS WINSORIZED TO THE TRAINING RANGE. The 108 training protocols'
+//    7-day growth spans [-40.1%, +2.7%], but board rows reach +4448%
+//    (Shift DeFi). radar-5 fed that straight into a coefficient fitted on
+//    [-40%, +3%]: its #1 row's growth term was 353% of its whole log-ratio.
+//    radar-6 clamps every protocol's growth to the range the training set
+//    actually saw, computed from the training rows on every run — a +4448%
+//    week counts as +2.7%. The winsor changes no held-out number (every
+//    training row is inside the range); it stops the board extrapolating 74x
+//    past its own data. Shift DeFi falls from #1 to #93 on this alone.
+// 2. RATIO CAP 3. Training rows are live-token protocols with mcap / TVL <= 3
+//    (was 5): the four rows above 3x (Osmosis, THORChain, Synapse, Astar
+//    dApps Staking — $7-56M TVL at 3.0-3.6x, 15-18x the training median
+//    0.20x) are the top 5% tail and no longer set the curve. Fair-tested on
+//    the same held-out rows, cap 3 wins LOO, walk-forward 50/50, 5-fold and
+//    blind size buckets, and loses walk-forward 70/30, blind categories and
+//    the random-split mean — a judgment call, reported in full, not a sweep.
+// 3. VERSIONED FAMILIES RANK ONCE. radar-5 excluded every "V2"/"V3" name as
+//    a pool of another protocol — but the 11 versioned pre-token rows have no
+//    base record in the snapshot at all (there is no "Aera", no "RocketSwap
+//    Anubis"). They are the protocol, versioned. radar-6 collapses each
+//    version family to its largest-TVL member (the same familyKey rule the
+//    training dedup already uses) and names the merge in the integrity strip.
+//    Ten families join the board, including RocketSwap Anubis V2 ($350M TVL).
+// 4. FARM VERDICTS THAT ADD UP. Gas used to count 9 flat transactions while
+//    the plan itself promised a weekly action for a 30-60 day hold; the
+//    farmer's share used to ignore the deposit entirely, so $50 and $250
+//    "captured" the same share. radar-6 charges gas for the whole hold
+//    (3 setup transactions + one per week of the hold) and scales the
+//    farmer's share with the deposit (reference $100). Every row also shows
+//    net farm value per $100 deposited, so two FARM rows can still be told
+//    apart.
 //
 // Validation is held out twice: walk-forward in time (LOO, 50/70/80 splits,
 // 5-fold, 20 random time splits) AND blind comps curves (leave-one-category-
 // out and leave-one-size-bucket-out), plus a held-out calibration check of
-// the odds on a random half of the protocols. Rejected variants are still shown
+// the odds on a random half of the protocols, plus a fair cap-3-vs-cap-5
+// comparison on the same held-out rows. Rejected variants are still shown
 // with their numbers. The fit is recomputed from the sealed snapshot on
 // every run; no protocol name is ever special-cased.
 //
@@ -101,7 +118,7 @@ export interface ModelConstants {
   farm_pool_share: number;
   farm_farmer_share: number;
   /** Farm verdict assumptions: transactions in one farm plan, hours of the farmer's time, value of an hour. */
-  farm_tx_count: number;
+  farm_setup_tx: number;
   farm_hours: number;
   farm_hour_usd: number;
   /** Net farm value above this is FARM; above zero is THIN; at or below zero is SKIP. */
@@ -113,7 +130,7 @@ export const MODEL: ModelConstants = {
   growth_cap: 200,
   unknown_age_days: 365,
   chain_cap: 5,
-  ratio_cap: 5,
+  ratio_cap: 3,
   shrink_k: 5,
   multiple_floor: 0.01,
   multiple_cap: 3,
@@ -131,14 +148,14 @@ export const MODEL: ModelConstants = {
   odds_category_k: 20,
   farm_pool_share: 0.05,
   farm_farmer_share: 0.0004,
-  farm_tx_count: 9,
+  farm_setup_tx: 3,
   farm_hours: 3,
   farm_hour_usd: 15,
   farm_threshold_usd: 100,
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-6';
 
 /** How many live-token protocols the Live token view carries: all of them, by market cap. */
 export const LIVE_ROWS = 1000;
@@ -215,6 +232,23 @@ export interface ValidationSummary {
   odds_calibration: OddsCalibration;
   /** Leave-one-out of the shipped fit on the training set BEFORE one-per-ticker dedup, for comparison. */
   loo_before_dedup_x: number;
+  /**
+   * The ratio-cap choice, fair-tested: the shipped fit (cap 3) and the old
+   * cap-5 fit, each scored on the SAME held-out rows (the cap-5 universe of
+   * 112 training protocols; cap-3 training folds drop the four rows above
+   * 3x, the test folds never do). A cap is a judgment call — these are the
+   * numbers it rests on.
+   */
+  cap_fair: {
+    loo_cap3_x: number;
+    loo_cap5_x: number;
+    wf70_cap3_x: number;
+    wf70_cap5_x: number;
+    fivefold_cap3_x: number;
+    fivefold_cap5_x: number;
+    loco_cap3_x: number;
+    loco_cap5_x: number;
+  };
 }
 
 /** One point of the size curve: the fitted multiple at a TVL, next to what the data pays there. */
@@ -236,6 +270,8 @@ export interface FittedModel {
   n_train: number;
   /** Training rows before one-per-ticker dedup. */
   n_train_raw: number;
+  /** Training rows before the ratio cap (priced live-token protocols, any ratio). */
+  n_train_before_cap: number;
   /** Families collapsed by dedup (family key → slugs kept out), for the integrity strip. */
   dedup_removed: string[];
   n_categories: number;
@@ -247,6 +283,9 @@ export interface FittedModel {
   huber_scale: number;
   /** Huber iterations run before the fit settled. */
   huber_iters_used: number;
+  /** Growth winsor limits, in percent: the min/max 7-day growth the training set actually saw. */
+  growth_lo: number;
+  growth_hi: number;
 }
 
 /** A farm verdict: the net value of farming one protocol, and what to do. */
@@ -256,10 +295,16 @@ export interface FarmVerdict {
   farmer_expected_usd: number;
   /** Total gas for the plan's transactions, in dollars. */
   gas_total_usd: number;
+  /** Transactions the plan charges gas for: setup + one per week of the hold. */
+  gas_txns: number;
+  /** Days the position is held, from the protocol's age. */
+  hold_days: number;
   /** Value of the farmer's time in the plan, in dollars. */
   time_value_usd: number;
   /** Net farm value: farmer share − gas − time. */
   net_usd: number;
+  /** Net farm value per $100 deposited — the efficiency that separates two FARM rows. */
+  net_per_100_usd: number;
   /** Deposit sized to the verdict: full capital for FARM, half for THIN, $0 for SKIP. */
   deposit_usd: number;
 }
@@ -275,6 +320,8 @@ export interface IntegrityStrip {
   excluded_traded_tokens: string[];
   /** Names of the already-traded tokens forced onto the board by the gate's watchlist. */
   watchlist_traded_override: string[];
+  /** Versioned families ranked once: the kept row and the version(s) folded into it. */
+  merged_families: { kept: string; merged: string[] }[];
   null_change_7d: number;
   null_listed_at: number;
   null_category: number;
@@ -282,6 +329,7 @@ export interface IntegrityStrip {
   watchlist_total: number;
   n_train_raw: number;
   n_train_dedup: number;
+  n_train_before_cap: number;
 }
 
 /** A farm step: the action, what it costs, and how long it takes. */
@@ -321,6 +369,11 @@ export interface BoardRow {
   farm_verdict: 'FARM' | 'THIN' | 'SKIP';
   farm_net_usd: number;
   farm_deposit_usd: number;
+  farm_gas_txns: number;
+  farm_hold_days: number;
+  farm_net_per_100_usd: number;
+  /** Set when versioned siblings were folded into this row (e.g. Aera V2 into Aera V3). */
+  merged_from?: string[];
   /** Set only on gate-forced already-traded rows (USDD, Bittensor dTAO). */
   already_traded?: boolean;
   already_traded_note?: string;
@@ -364,6 +417,10 @@ export interface RadarRow {
   farm_verdict: 'FARM' | 'THIN' | 'SKIP';
   farm_net_usd: number;
   farm_deposit_usd: number;
+  farm_gas_txns: number;
+  farm_hold_days: number;
+  farm_net_per_100_usd: number;
+  merged_from?: string[];
   already_traded?: boolean;
   already_traded_note?: string;
   multiple: number;
@@ -405,10 +462,14 @@ export interface RadarData {
   fit_beta: number[];
   fit_r_squared: number;
   fit_n_train: number;
+  fit_n_train_before_cap: number;
   fit_n_categories: number;
   fit_train_median_ratio: number;
   fit_huber_k: number;
   fit_huber_scale: number;
+  /** Growth winsor limits, in percent, from the training set. */
+  growth_lo: number;
+  growth_hi: number;
   validation: ValidationSummary;
   categories: FittedCategory[];
   size_curve: SizeCurvePoint[];
@@ -417,7 +478,7 @@ export interface RadarData {
   live: LiveRow[];
   integrity: IntegrityStrip;
   verdict_counts: { FARM: number; THIN: number; SKIP: number };
-  farm_assumptions: { pool_share: number; farmer_share: number; tx_count: number; hours: number; hour_usd: number; threshold_usd: number };
+  farm_assumptions: { pool_share: number; farmer_share: number; setup_tx: number; hours: number; hour_usd: number; threshold_usd: number };
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -467,9 +528,6 @@ export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
 }
 
-/** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
-const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
-
 /** Categories that are an exchange's own product, never a protocol launch of its own. */
 const EXCHANGE_CATEGORIES = new Set(['CEX']);
 
@@ -480,11 +538,16 @@ const WRAPPED_WORD = /\bwrapped\b|\bstaked\b|\bstaking\b/i;
 const EXCHANGE_PREFIX = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)\b/i;
 
 /**
- * Whether a protocol is one the board may rank: pre-token, not an exchange, not a
- * versioned pool, and not a product whose name says it is a wrapped or staked
- * version of a token that already trades. Bridge and liquid-staking protocols
- * stay in: a bridge or a staking pool with no token of its own can still launch
- * one, and the snapshot's own watchlist rule is a floor, never a ceiling.
+ * Whether a protocol is one the board may rank: pre-token, not an exchange,
+ * and not a product whose name says it is a wrapped or staked version of a
+ * token that already trades. Bridge and liquid-staking protocols stay in: a
+ * bridge or a staking pool with no token of its own can still launch one, and
+ * the snapshot's own watchlist rule is a floor, never a ceiling.
+ *
+ * Versioned names ("Aera V3", "RocketSwap Anubis V2") are NOT excluded here:
+ * the 11 versioned pre-token rows have no base record in the snapshot at all,
+ * so they are the protocol, versioned — buildBoard collapses each version
+ * family to its largest-TVL member instead of dropping it.
  *
  * The snapshot's token fields are wrong for the protocols in TRADED_TOKEN_SLUGS:
  * the protocol IS a token that already trades (wrapped BTC, bridged USDC, a
@@ -494,7 +557,6 @@ const EXCHANGE_PREFIX = /^(Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gem
 export function isRankable(p: SnapshotProtocol): boolean {
   if (!isPreToken(p)) return false;
   if (p.category !== null && EXCHANGE_CATEGORIES.has(p.category)) return false;
-  if (VERSIONED.test(p.name)) return false;
   if (WRAPPED_WORD.test(p.name)) return false;
   if (EXCHANGE_PREFIX.test(p.name)) return false;
   if (WATCHLIST_TRADED_OVERRIDE.has(p.slug)) return true;
@@ -558,10 +620,36 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
 
+/**
+ * The growth winsor limits of a training set, in percent: the min/max 7-day
+ * growth the training rows actually saw. A board row's growth is clamped to
+ * these limits before it enters the fit — the fit never extrapolates past
+ * its own data (training: [-40.1%, +2.7%]; board rows reach +4448%).
+ */
+export interface GrowthLimits {
+  lo: number;
+  hi: number;
+}
+
+/** The winsor limits of these rows: min/max of their clipped 7-day growth. */
+export function growthLimitsOf(rows: TrainRow[], model: ModelConstants): GrowthLimits {
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = Number.NEGATIVE_INFINITY;
+  for (const r of rows) {
+    const g = Math.min(model.growth_cap, Math.max(model.growth_floor, finite(r.p.change_7d, 0)));
+    if (g < lo) lo = g;
+    if (g > hi) hi = g;
+  }
+  if (!Number.isFinite(lo)) return { lo: model.growth_floor, hi: model.growth_cap };
+  return { lo, hi };
+}
+
 /** The regression features of one protocol: [1, log10 TVL, growth, ln(1+age), chains]. */
-export function featuresOf(p: SnapshotProtocol, asOf: string, model: ModelConstants): number[] {
+export function featuresOf(p: SnapshotProtocol, asOf: string, model: ModelConstants, glim: GrowthLimits | null = null): number[] {
   const age = ageDays(asOf, p.listed_at);
-  const growth = Math.min(model.growth_cap, Math.max(model.growth_floor, finite(p.change_7d, 0))) / 100;
+  let growth = Math.min(model.growth_cap, Math.max(model.growth_floor, finite(p.change_7d, 0)));
+  if (glim !== null) growth = Math.min(glim.hi, Math.max(glim.lo, growth));
+  growth /= 100;
   return [
     1,
     Math.log10(Math.max(p.tvl_usd, 1)),
@@ -589,16 +677,22 @@ export interface FitSpec {
   catxsize: boolean;
   /** Time-weighting half-life in days; 0 means every training row weighs the same. */
   timeTauDays: number;
+  /** Drop the growth feature entirely — tested, rejected. */
+  dropGrowth: boolean;
+  /** A size × growth interaction term — tested, rejected. */
+  interact: boolean;
 }
 
 export const SHIPPED_SPEC: FitSpec = {
-  name: 'radar-4',
+  name: 'radar-6',
   huber: true,
   k: 1.345,
   quad: false,
   year: false,
   catxsize: false,
   timeTauDays: 0,
+  dropGrowth: false,
+  interact: false,
 };
 
 export const OLS_SPEC: FitSpec = {
@@ -609,14 +703,18 @@ export const OLS_SPEC: FitSpec = {
   year: false,
   catxsize: false,
   timeTauDays: 0,
+  dropGrowth: false,
+  interact: false,
 };
 
 /** The rejected variants, each differing from the shipped fit in exactly one choice. */
 export const REJECTED_SPECS: FitSpec[] = [
-  { name: 'quadratic size curve', huber: true, k: 1.345, quad: true, year: false, catxsize: false, timeTauDays: 0 },
-  { name: 'time-weighted training (τ = 2y)', huber: true, k: 1.345, quad: false, year: false, catxsize: false, timeTauDays: 730 },
-  { name: 'per-category size slopes', huber: true, k: 1.345, quad: false, year: false, catxsize: true, timeTauDays: 0 },
-  { name: 'listed-year trend', huber: true, k: 1.345, quad: false, year: true, catxsize: false, timeTauDays: 0 },
+  { name: 'quadratic size curve', huber: true, k: 1.345, quad: true, year: false, catxsize: false, timeTauDays: 0, dropGrowth: false, interact: false },
+  { name: 'time-weighted training (τ = 2y)', huber: true, k: 1.345, quad: false, year: false, catxsize: false, timeTauDays: 730, dropGrowth: false, interact: false },
+  { name: 'per-category size slopes', huber: true, k: 1.345, quad: false, year: false, catxsize: true, timeTauDays: 0, dropGrowth: false, interact: false },
+  { name: 'listed-year trend', huber: true, k: 1.345, quad: false, year: true, catxsize: false, timeTauDays: 0, dropGrowth: false, interact: false },
+  { name: 'no growth feature', huber: true, k: 1.345, quad: false, year: false, catxsize: false, timeTauDays: 0, dropGrowth: true, interact: false },
+  { name: 'size × growth interaction', huber: true, k: 1.345, quad: false, year: false, catxsize: false, timeTauDays: 0, dropGrowth: false, interact: true },
 ];
 
 /** Categories with at least five training peers: the only ones a size slope is fit for. */
@@ -627,9 +725,10 @@ function bigCategories(rows: TrainRow[]): string[] {
 }
 
 /** The design row of one protocol under a spec: the five base features plus the spec's extras. */
-function designRow(p: SnapshotProtocol, asOf: string, model: ModelConstants, spec: FitSpec, bigCats: string[]): number[] {
-  const base = featuresOf(p, asOf, model);
+function designRow(p: SnapshotProtocol, asOf: string, model: ModelConstants, spec: FitSpec, bigCats: string[], glim: GrowthLimits | null = null): number[] {
+  const base = featuresOf(p, asOf, model, glim);
   const lt = Math.log10(Math.max(p.tvl_usd, 1));
+  if (spec.interact) base.push(lt * base[2]!);
   if (spec.quad) base.push(lt * lt);
   if (spec.year) {
     const y = p.listed_at !== null && /^\d{4}/.test(p.listed_at) ? parseInt(p.listed_at.slice(0, 4), 10) : 2023;
@@ -638,6 +737,7 @@ function designRow(p: SnapshotProtocol, asOf: string, model: ModelConstants, spe
   if (spec.catxsize) {
     for (const c of bigCats) base.push((p.category ?? '(no category)') === c ? lt : 0);
   }
+  if (spec.dropGrowth) return [base[0]!, base[1]!, base[3]!, base[4]!];
   return base;
 }
 
@@ -668,14 +768,14 @@ export interface TrainRow {
 }
 
 /** The live-token protocols the fit learns from: priced, comparable, not an exchange. */
-function trainingRows(snapshot: Snapshot, asOf: string, model: ModelConstants): TrainRow[] {
+function trainingRows(snapshot: Snapshot, asOf: string, model: ModelConstants, ratioCap: number = model.ratio_cap): TrainRow[] {
   const rows: TrainRow[] = [];
   for (const p of snapshot.protocols) {
     if (isPreToken(p)) continue;
     if (p.category === 'CEX') continue;
     if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const ratio = p.mcap_usd / p.tvl_usd;
-    if (!(ratio > 0 && ratio <= model.ratio_cap)) continue;
+    if (!(ratio > 0 && ratio <= ratioCap)) continue;
     rows.push({ p, y: Math.log(ratio), category: p.category ?? '(no category)' });
   }
   return rows;
@@ -822,6 +922,8 @@ interface FittedSpec {
   bigCats: string[];
   scale: number;
   itersUsed: number;
+  /** The growth winsor limits this fit trained under (from its own training rows). */
+  glim: GrowthLimits;
 }
 
 /**
@@ -830,11 +932,14 @@ interface FittedSpec {
  * min(1, k·scale/|residual|) with scale = 1.4826 × MAD, until the coefficients
  * stop moving. OLS is the same path with one pass and no reweighting. The
  * category effect is the shrunk mean residual per category, as in radar-2/3.
+ * Growth is winsorized to the training rows' own range before it enters the
+ * design, so no fit ever extrapolates past the growth its data actually saw.
  */
 function fitSpec(rows: TrainRow[], spec: FitSpec, model: ModelConstants, asOf: string): FittedSpec | null {
   if (rows.length === 0) return null;
   const bigCats = spec.catxsize ? bigCategories(rows) : [];
-  const design = rows.map((r) => designRow(r.p, asOf, model, spec, bigCats));
+  const glim = growthLimitsOf(rows, model);
+  const design = rows.map((r) => designRow(r.p, asOf, model, spec, bigCats, glim));
   const y = rows.map((r) => r.y);
   const w0 = rows.map((r) => timeWeight(r.p, asOf, model, spec));
   let beta = wls(design, y, w0);
@@ -875,7 +980,7 @@ function fitSpec(rows: TrainRow[], spec: FitSpec, model: ModelConstants, asOf: s
     const mean = res.reduce((a, b) => a + b, 0) / res.length;
     catAdj.set(c, (res.length / (res.length + model.shrink_k)) * mean);
   }
-  return { beta, catAdj, bigCats, scale, itersUsed };
+  return { beta, catAdj, bigCats, scale, itersUsed, glim };
 }
 
 /** The fitted ln(mcap / TVL) of one design row in one category. */
@@ -904,7 +1009,7 @@ function peerBaselinePredict(train: TrainRow[], test: TrainRow[], model: ModelCo
 function specPredict(train: TrainRow[], test: TrainRow[], spec: FitSpec, model: ModelConstants, asOf: string): number[] | null {
   const fit = fitSpec(train, spec, model, asOf);
   if (fit === null) return null;
-  return test.map((t) => predictSpec(designRow(t.p, asOf, model, spec, fit.bigCats), t.category, fit));
+  return test.map((t) => predictSpec(designRow(t.p, asOf, model, spec, fit.bigCats, fit.glim), t.category, fit));
 }
 
 /** The median / within-2× summary of one test, for the three models at once. */
@@ -965,7 +1070,11 @@ function looValidation(rows: TrainRow[], model: ModelConstants, asOf: string): {
           ? 'down-weighting older listings throws away half of an already small training set'
           : s.name === 'per-category size slopes'
             ? 'category slopes fit random folds but fail every walk-forward split — they do not survive into the future'
-            : 'a listing-year trend helps one split and hurts the rest',
+            : s.name === 'no growth feature'
+              ? 'dropping growth helps the time splits but wrecks the blind category test — growth carries signal across categories, just not across the 7-day spike'
+              : s.name === 'size × growth interaction'
+                ? 'letting growth bend the size curve fits noise: it loses every random time split'
+                : 'a listing-year trend helps one split and hurts the rest',
   }));
   return { test, rejected };
 }
@@ -1126,8 +1235,146 @@ function oddsCalibration(snapshot: Snapshot, model: ModelConstants, asOf: string
   return { n_test: test.length, mean_abs_error: round4(mae), quartiles };
 }
 
+/** Size bucket of a protocol, by log10 TVL — the comps curve's buckets. */
+function sizeBucketIndex(p: SnapshotProtocol): number {
+  const lt = Math.log10(Math.max(p.tvl_usd, 1));
+  return lt < 7 ? 0 : lt < 8 ? 1 : lt < 9 ? 2 : 3;
+}
+
+/** The bucket-median comps model: each size bucket's median log ratio, plus a shrunk category residual. */
+interface BucketFit {
+  bmed: Map<number, number>;
+  global: number;
+  catAdj: Map<string, number>;
+}
+
+function fitBucket(train: TrainRow[], model: ModelConstants): BucketFit {
+  const byBucket = new Map<number, number[]>();
+  for (const r of train) {
+    const arr = byBucket.get(sizeBucketIndex(r.p)) ?? [];
+    arr.push(r.y);
+    byBucket.set(sizeBucketIndex(r.p), arr);
+  }
+  const bmed = new Map<number, number>();
+  for (const [b, ys] of byBucket) bmed.set(b, median(ys) ?? 0);
+  const global = median(train.map((r) => r.y)) ?? 0;
+  const byCat = new Map<string, number[]>();
+  for (const r of train) {
+    const arr = byCat.get(r.category) ?? [];
+    arr.push(r.y - (bmed.get(sizeBucketIndex(r.p)) ?? global));
+    byCat.set(r.category, arr);
+  }
+  const catAdj = new Map<string, number>();
+  for (const [c, res] of byCat) {
+    const mean = res.reduce((a, b) => a + b, 0) / res.length;
+    catAdj.set(c, (res.length / (res.length + model.shrink_k)) * mean);
+  }
+  return { bmed, global, catAdj };
+}
+
+function predictBucket(fit: BucketFit, p: SnapshotProtocol, category: string): number {
+  return (fit.bmed.get(sizeBucketIndex(p)) ?? fit.global) + (fit.catAdj.get(category) ?? 0);
+}
+
+/**
+ * Leave-one-out of the bucket-median comps model and of a 50/50 ensemble of
+ * it with the shipped Huber fit — both built, tested and rejected, with their
+ * numbers. The comps curve loses everywhere; the ensemble inherits its loss.
+ */
+function looBucketAndEnsemble(rows: TrainRow[], model: ModelConstants, asOf: string): { bucket_x: number; ensemble_x: number } {
+  const bucketErrs: number[] = [];
+  const ensErrs: number[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const train = rows.filter((_, j) => j !== i);
+    const test = rows[i]!;
+    const bf = fitBucket(train, model);
+    const bp = predictBucket(bf, test.p, test.category);
+    bucketErrs.push(Math.abs(test.y - bp));
+    const hp = specPredict(train, [test], SHIPPED_SPEC, model, asOf);
+    const ens = hp === null ? bp : 0.5 * (hp[0]! + bp);
+    ensErrs.push(Math.abs(test.y - ens));
+  }
+  return {
+    bucket_x: round4(Math.exp(median(bucketErrs) ?? 0)),
+    ensemble_x: round4(Math.exp(median(ensErrs) ?? 0)),
+  };
+}
+
+/**
+ * The ratio-cap choice, fair-tested: the shipped cap-3 fit against the old
+ * cap-5 fit on the SAME held-out rows — the cap-5 universe of training
+ * protocols, with the cap-3 training folds dropping the rows above 3x and
+ * the test folds never dropping anything. Four headline tests; the full
+ * per-test table lives in the Python experiment log, these are its numbers.
+ */
+function fairCapComparison(universe: TrainRow[], model: ModelConstants, asOf: string): ValidationSummary['cap_fair'] {
+  const cap3 = (rows: TrainRow[]): TrainRow[] => rows.filter((r) => Math.exp(r.y) <= model.ratio_cap);
+  const medX = (errs: number[]): number => round4(Math.exp(median(errs) ?? 0));
+  const predictOne = (train: TrainRow[], test: TrainRow[]): number[] | null => specPredict(train, test, SHIPPED_SPEC, model, asOf);
+  // Leave-one-out over the whole universe.
+  const looErrs = (filter: (rows: TrainRow[]) => TrainRow[]): number[] => {
+    const errs: number[] = [];
+    for (let i = 0; i < universe.length; i++) {
+      const train = filter(universe.filter((_, j) => j !== i));
+      const pred = predictOne(train, [universe[i]!]);
+      errs.push(pred === null ? Math.abs(universe[i]!.y) : Math.abs(universe[i]!.y - pred[0]!));
+    }
+    return errs;
+  };
+  // One walk-forward split, fit on the oldest listings, test on the newest.
+  const wfErrs = (frac: number, filter: (rows: TrainRow[]) => TrainRow[]): number[] => {
+    const dated = universe.filter((r) => r.p.listed_at !== null).sort((a, b) => (a.p.listed_at! < b.p.listed_at! ? -1 : 1));
+    const cut = dated[Math.floor(dated.length * frac)]!.p.listed_at!;
+    const train = filter(universe.filter((r) => r.p.listed_at === null || r.p.listed_at < cut));
+    const test = dated.filter((r) => r.p.listed_at! >= cut);
+    const pred = predictOne(train, test);
+    return test.map((r, i) => (pred === null ? Math.abs(r.y) : Math.abs(r.y - pred[i]!)));
+  };
+  // 5-fold hash split.
+  const fiveFoldErrs = (filter: (rows: TrainRow[]) => TrainRow[]): number[] => {
+    const errs: number[] = [];
+    for (let f = 0; f < model.folds; f++) {
+      const train = filter(universe.filter((r) => hashOf(r.p.slug) % model.folds !== f));
+      const test = universe.filter((r) => hashOf(r.p.slug) % model.folds === f);
+      if (train.length === 0 || test.length === 0) continue;
+      const pred = predictOne(train, test);
+      test.forEach((r, i) => errs.push(pred === null ? Math.abs(r.y) : Math.abs(r.y - pred[i]!)));
+    }
+    return errs;
+  };
+  // Blind leave-one-category-out, pooled.
+  const locoErrs = (filter: (rows: TrainRow[]) => TrainRow[]): number[] => {
+    const groups = new Map<string, TrainRow[]>();
+    for (const r of universe) {
+      const arr = groups.get(r.category) ?? [];
+      arr.push(r);
+      groups.set(r.category, arr);
+    }
+    const errs: number[] = [];
+    for (const [, test] of groups) {
+      if (test.length < 5) continue;
+      const train = filter(universe.filter((r) => !test.includes(r)));
+      if (train.length < 40) continue;
+      const pred = predictOne(train, test);
+      test.forEach((r, i) => errs.push(pred === null ? Math.abs(r.y) : Math.abs(r.y - pred[i]!)));
+    }
+    return errs;
+  };
+  const id = (rows: TrainRow[]): TrainRow[] => rows;
+  return {
+    loo_cap3_x: medX(looErrs(cap3)),
+    loo_cap5_x: medX(looErrs(id)),
+    wf70_cap3_x: medX(wfErrs(0.7, cap3)),
+    wf70_cap5_x: medX(wfErrs(0.7, id)),
+    fivefold_cap3_x: medX(fiveFoldErrs(cap3)),
+    fivefold_cap5_x: medX(fiveFoldErrs(id)),
+    loco_cap3_x: medX(locoErrs(cap3)),
+    loco_cap5_x: medX(locoErrs(id)),
+  };
+}
+
 /** The full validation: leave-one-out, three walk-forward splits, 5-fold, and the random-split summary. */
-function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string, snapshot: Snapshot, looBeforeDedupX: number): ValidationSummary {
+function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string, snapshot: Snapshot, looBeforeDedupX: number, rowsCap5: TrainRow[]): ValidationSummary {
   const loo = looValidation(rows, model, asOf);
   const wf70 = walkForwardTest(rows, 0.7, model, asOf);
   const tests: ValidationTest[] = [
@@ -1137,9 +1384,23 @@ function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string, snap
     walkForwardTest(rows, 0.8, model, asOf),
     fiveFoldTest(rows, model, asOf),
   ];
+  const bucket = looBucketAndEnsemble(rows, model, asOf);
+  const rejected = [
+    ...loo.rejected,
+    {
+      name: 'bucket-median comps curve',
+      loo_median_x: bucket.bucket_x,
+      note: 'pricing each size bucket at its own median ratio, with a category factor, loses to the regression on every held-out test — the buckets are too coarse and the medians too noisy at n=108',
+    },
+    {
+      name: 'ensemble: Huber + bucket-median',
+      loo_median_x: bucket.ensemble_x,
+      note: 'averaging the shipped fit with the comps curve inherits the curve\u2019s loss instead of hedging it',
+    },
+  ];
   return {
     tests,
-    rejected: loo.rejected,
+    rejected,
     random_splits: randomSplitSummary(rows, model, asOf),
     loo_median_x: loo.test.model_median_x,
     wf_median_x: wf70.model_median_x,
@@ -1149,6 +1410,7 @@ function validateAll(rows: TrainRow[], model: ModelConstants, asOf: string, snap
     ],
     odds_calibration: oddsCalibration(snapshot, model, asOf),
     loo_before_dedup_x: looBeforeDedupX,
+    cap_fair: fairCapComparison(rowsCap5, model, asOf),
   };
 }
 
@@ -1175,28 +1437,31 @@ function sizeCurvePoint(
 }
 
 /**
- * Fit the radar-4 model on the snapshot: Huber regression on all priced
+ * Fit the radar-6 model on the snapshot: Huber regression on all priced
  * live-token protocols, shrunk category residuals, R² of the full fit, the
  * leave-one-out / walk-forward / 5-fold validation, and the per-category
  * table and size curve the dashboard prints.
  */
 export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): FittedModel {
   const rawTrain = trainingRows(snapshot, snapshot.as_of, model);
+  const rawAll = trainingRows(snapshot, snapshot.as_of, model, Number.POSITIVE_INFINITY);
   const { rows: train, removed } = dedupTrainingRows(rawTrain);
+  const { rows: rowsCap5 } = dedupTrainingRows(trainingRows(snapshot, snapshot.as_of, model, 5));
   const full = fitSpec(train, SHIPPED_SPEC, model, snapshot.as_of);
+  const glim = full !== null ? full.glim : growthLimitsOf(train, model);
   const yMean = train.reduce((a, r) => a + r.y, 0) / Math.max(train.length, 1);
   const beta = full !== null ? full.beta : [yMean, 0, 0, 0, 0];
   const catAdj = full !== null ? full.catAdj : new Map<string, number>();
   let ssRes = 0;
   let ssTot = 0;
   for (const r of train) {
-    const pred = predictSpec(designRow(r.p, snapshot.as_of, model, SHIPPED_SPEC, []), r.category, { beta, catAdj, bigCats: [], scale: 0, itersUsed: 0 });
+    const pred = predictSpec(designRow(r.p, snapshot.as_of, model, SHIPPED_SPEC, [], glim), r.category, { beta, catAdj, bigCats: [], scale: 0, itersUsed: 0, glim });
     ssRes += (r.y - pred) ** 2;
     ssTot += (r.y - yMean) ** 2;
   }
   const rSquared = ssTot > 0 ? 1 - ssRes / ssTot : 0;
   const looBeforeDedup = looValidation(rawTrain, model, snapshot.as_of).test.model_median_x;
-  const validation = validateAll(train, model, snapshot.as_of, snapshot, looBeforeDedup);
+  const validation = validateAll(train, model, snapshot.as_of, snapshot, looBeforeDedup, rowsCap5);
   const byCat = new Map<string, number[]>();
   for (const r of train) {
     const arr = byCat.get(r.category) ?? [];
@@ -1211,7 +1476,7 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
       fitted_factor: round4(Math.exp(catAdj.get(category) ?? 0)),
     }))
     .sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1));
-  const medGrowth = median(train.map((r) => Math.min(model.growth_cap, Math.max(model.growth_floor, finite(r.p.change_7d, 0))) / 100)) ?? 0;
+  const medGrowth = median(train.map((r) => featuresOf(r.p, snapshot.as_of, model, glim)[2]!)) ?? 0;
   const medLogAge = median(train.map((r) => Math.log1p(ageDays(snapshot.as_of, r.p.listed_at) ?? model.unknown_age_days))) ?? Math.log1p(365);
   const medChains = median(train.map((r) => Math.min(r.p.chains.length, model.chain_cap))) ?? 1;
   const bucketOf = (lt: number): string => (lt < 7 ? '<$10M' : lt < 8 ? '$10–100M' : lt < 9 ? '$100M–1B' : lt < 10 ? '$1–10B' : '>$10B');
@@ -1231,6 +1496,7 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     r_squared: round4(rSquared),
     n_train: train.length,
     n_train_raw: rawTrain.length,
+    n_train_before_cap: rawAll.length,
     dedup_removed: removed,
     n_categories: byCat.size,
     train_median_ratio: round4(median(train.map((r) => Math.exp(r.y))) ?? 0),
@@ -1239,6 +1505,8 @@ export function fitModel(snapshot: Snapshot, model: ModelConstants = MODEL): Fit
     size_curve: sizeCurve,
     huber_scale: round4(full !== null ? full.scale : 0),
     huber_iters_used: full !== null ? full.itersUsed : 0,
+    growth_lo: round4(glim.lo),
+    growth_hi: round4(glim.hi),
   };
 }
 
@@ -1263,7 +1531,7 @@ export function impliedValue(
   age: number | null;
 } {
   const age = ageDays(asOf, protocol.listed_at);
-  const x = featuresOf(protocol, asOf, model);
+  const x = featuresOf(protocol, asOf, model, { lo: fit.growth_lo, hi: fit.growth_hi });
   const category = protocol.category ?? '(no category)';
   const categoryTerm = fit.catAdj.get(category) ?? 0;
   const constTerm = fit.beta[0]!;
@@ -1315,7 +1583,7 @@ function bootstrapRanges(
     const fit = fitSpec(sample, SHIPPED_SPEC, model, asOf);
     if (fit === null) continue;
     const scored = protocols.map((p) => {
-      const logRatio = predictSpec(designRow(p, asOf, model, SHIPPED_SPEC, fit.bigCats), p.category ?? '(no category)', fit);
+      const logRatio = predictSpec(designRow(p, asOf, model, SHIPPED_SPEC, fit.bigCats, fit.glim), p.category ?? '(no category)', fit);
       const multiple = Math.min(model.multiple_cap, Math.max(model.multiple_floor, Math.exp(logRatio)));
       const implied = Math.max(1, Math.round(p.tvl_usd * multiple));
       return { slug: p.slug, expected: (odds.get(p.slug)?.odds ?? 0) * implied };
@@ -1354,6 +1622,27 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
   for (const p of rest) chosen.set(p.slug, p);
 
+  // One row per version family: "Aera V2" and "Aera V3" are two records of
+  // one protocol, not two launches — keep the largest-TVL member (the same
+  // familyKey rule the training dedup uses) and record the fold so the
+  // integrity strip can name it. Families with a single version keep their row.
+  const mergedFrom = new Map<string, string[]>();
+  {
+    const byFamily = new Map<string, SnapshotProtocol[]>();
+    for (const p of chosen.values()) {
+      const arr = byFamily.get(familyKey(p)) ?? [];
+      arr.push(p);
+      byFamily.set(familyKey(p), arr);
+    }
+    for (const [, members] of byFamily) {
+      if (members.length <= 1) continue;
+      members.sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1));
+      const kept = members[0]!;
+      for (const m of members.slice(1)) chosen.delete(m.slug);
+      mergedFrom.set(kept.slug, members.slice(1).map((m) => m.slug));
+    }
+  }
+
   const oddsTable = buildOddsTable(snapshot, snapshot.as_of);
   const odds = new Map<string, { odds: number; peers: number }>();
   for (const p of chosen.values()) odds.set(p.slug, tokenOdds(p, snapshot.as_of, oddsTable, model));
@@ -1365,7 +1654,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     const v = impliedValue(p, snapshot.as_of, model, fitted);
     const o = odds.get(p.slug)!;
     const expected = Math.max(1, Math.round(o.odds * v.implied));
-    const baseVerdict = farmVerdictFor(p, expected, model);
+    const baseVerdict = farmVerdictFor(p, expected, model, snapshot.as_of);
     // Gate-forced already-traded rows (USDD, Bittensor dTAO): the verdict is
     // SKIP with a $0 deposit whatever the model nets — the token already
     // trades, so there is nothing to farm. The net figure stays the model's
@@ -1408,6 +1697,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, fi
     farm_verdict: s.verdict.verdict,
     farm_net_usd: s.verdict.net_usd,
     farm_deposit_usd: s.verdict.deposit_usd,
+    farm_gas_txns: s.verdict.gas_txns,
+    farm_hold_days: s.verdict.hold_days,
+    farm_net_per_100_usd: s.verdict.net_per_100_usd,
+    merged_from: mergedFrom.get(s.p.slug),
     already_traded: WATCHLIST_TRADED_OVERRIDE.has(s.p.slug) ? true : undefined,
     already_traded_note: WATCHLIST_TRADED_OVERRIDE.has(s.p.slug) ? TRADED_TOKEN_SLUGS[s.p.slug] : undefined,
     model: {
@@ -1503,24 +1796,35 @@ function gasUsdFor(chain: string): number {
 /**
  * The netted farm verdict. The farmer's expected share assumes the airdrop
  * pool is farm_pool_share of the expected value and this one farmer captures
- * farm_farmer_share of that pool; gas is farm_tx_count transactions at the
- * chain's per-transaction cost; time is farm_hours at farm_hour_usd. Net
- * above farm_threshold_usd → FARM, above zero → THIN, otherwise SKIP. The
- * deposit is the full capital for FARM, half for THIN, $0 for SKIP.
+ * farm_farmer_share of that pool — scaled by the deposit (reference $100), so
+ * a $250 deposit captures 2.5x the share of a $100 one and a $50 deposit half:
+ * radar-5 gave every deposit the same share, which made the deposit size
+ * meaningless. Gas is charged for the whole hold — farm_setup_tx setup
+ * transactions plus one weekly transaction per week of the hold — because the
+ * plan itself promises a weekly action for the full 30-60 days; radar-5
+ * charged 9 flat transactions while the steps promised weekly ones. Time is
+ * farm_hours at farm_hour_usd. Net above farm_threshold_usd → FARM, above
+ * zero → THIN, otherwise SKIP. The deposit is the full capital for FARM,
+ * half for THIN, $0 for SKIP.
  */
-export function farmVerdictFor(p: SnapshotProtocol, expectedUsd: number, model: ModelConstants): FarmVerdict {
-  const farmerExpected = expectedUsd * model.farm_pool_share * model.farm_farmer_share;
-  const gasTotal = model.farm_tx_count * gasUsdFor(chainOf(p));
+export function farmVerdictFor(p: SnapshotProtocol, expectedUsd: number, model: ModelConstants, asOf: string): FarmVerdict {
+  const capital = capitalFor(p);
+  const farmerExpected = expectedUsd * model.farm_pool_share * model.farm_farmer_share * (capital / 100);
+  const holdDays = holdDaysFor(ageDays(asOf, p.listed_at));
+  const gasTxns = model.farm_setup_tx + Math.ceil(holdDays / 7);
+  const gasTotal = gasTxns * gasUsdFor(chainOf(p));
   const timeValue = model.farm_hours * model.farm_hour_usd;
   const net = farmerExpected - gasTotal - timeValue;
-  const capital = capitalFor(p);
   const verdict: FarmVerdict['verdict'] = net > model.farm_threshold_usd ? 'FARM' : net > 0 ? 'THIN' : 'SKIP';
   return {
     verdict,
     farmer_expected_usd: Math.round(farmerExpected * 100) / 100,
     gas_total_usd: Math.round(gasTotal * 100) / 100,
+    gas_txns: gasTxns,
+    hold_days: holdDays,
     time_value_usd: timeValue,
     net_usd: Math.round(net * 100) / 100,
+    net_per_100_usd: Math.round((net / capital) * 100 * 100) / 100,
     deposit_usd: verdict === 'FARM' ? capital : verdict === 'THIN' ? Math.max(25, Math.round(capital / 2)) : 0,
   };
 }
@@ -1763,6 +2067,10 @@ export function radarRow(row: BoardRow): RadarRow {
     farm_verdict: row.farm_verdict,
     farm_net_usd: row.farm_net_usd,
     farm_deposit_usd: row.farm_deposit_usd,
+    farm_gas_txns: row.farm_gas_txns,
+    farm_hold_days: row.farm_hold_days,
+    farm_net_per_100_usd: row.farm_net_per_100_usd,
+    merged_from: row.merged_from,
     already_traded: row.already_traded,
     already_traded_note: row.already_traded_note,
     multiple: row.model.multiple,
@@ -1785,7 +2093,6 @@ function exclusionReason(p: SnapshotProtocol): string | null {
   if (WATCHLIST_TRADED_OVERRIDE.has(p.slug)) return null;
   if (TRADED_TOKEN_SLUGS[p.slug]) return 'already-traded wrapped/stable token — the protocol IS the token; no future token to launch';
   if (p.category !== null && EXCHANGE_CATEGORIES.has(p.category)) return 'exchange product (CEX)';
-  if (VERSIONED.test(p.name)) return 'versioned pool of another protocol';
   if (WRAPPED_WORD.test(p.name)) return 'wrapped / staked product of a traded token';
   if (EXCHANGE_PREFIX.test(p.name)) return 'exchange-branded product';
   return null;
@@ -1808,6 +2115,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   }
   const verdictCounts = { FARM: 0, THIN: 0, SKIP: 0 };
   for (const r of board) verdictCounts[r.farm_verdict]++;
+  const mergedFamilies = board
+    .filter((r) => r.merged_from !== undefined && r.merged_from.length > 0)
+    .map((r) => ({ kept: r.name, merged: r.merged_from! }));
   const integrity: IntegrityStrip = {
     total_protocols: snapshot.protocols.length,
     ranked: board.length,
@@ -1816,6 +2126,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     excluded_by_reason: [...excludedByReason.entries()].map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
     excluded_traded_tokens: snapshot.protocols.filter((p) => isPreToken(p) && TRADED_TOKEN_SLUGS[p.slug] && !WATCHLIST_TRADED_OVERRIDE.has(p.slug)).map((p) => p.name),
     watchlist_traded_override: snapshot.protocols.filter((p) => WATCHLIST_TRADED_OVERRIDE.has(p.slug)).map((p) => p.name),
+    merged_families: mergedFamilies,
     null_change_7d: snapshot.protocols.filter((p) => p.change_7d === null).length,
     null_listed_at: snapshot.protocols.filter((p) => p.listed_at === null).length,
     null_category: snapshot.protocols.filter((p) => p.category === null).length,
@@ -1823,6 +2134,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     watchlist_total: snapshot.watchlist.length,
     n_train_raw: fit.n_train_raw,
     n_train_dedup: fit.n_train,
+    n_train_before_cap: fit.n_train_before_cap,
   };
   const radar: RadarData = {
     as_of: snapshot.as_of,
@@ -1837,10 +2149,13 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     fit_beta: fit.beta.map(round4),
     fit_r_squared: fit.r_squared,
     fit_n_train: fit.n_train,
+    fit_n_train_before_cap: fit.n_train_before_cap,
     fit_n_categories: fit.n_categories,
     fit_train_median_ratio: fit.train_median_ratio,
     fit_huber_k: model.huber_k,
     fit_huber_scale: fit.huber_scale,
+    growth_lo: fit.growth_lo,
+    growth_hi: fit.growth_hi,
     validation: fit.validation,
     categories: fit.categories,
     size_curve: fit.size_curve,
@@ -1852,7 +2167,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     farm_assumptions: {
       pool_share: model.farm_pool_share,
       farmer_share: model.farm_farmer_share,
-      tx_count: model.farm_tx_count,
+      setup_tx: model.farm_setup_tx,
       hours: model.farm_hours,
       hour_usd: model.farm_hour_usd,
       threshold_usd: model.farm_threshold_usd,
