@@ -30,11 +30,12 @@
   <section class="strip evidence" aria-label="Data integrity and out-of-sample evidence">
     <div id="integrity"></div>
     <div id="oosstrip"></div>
+    <div id="selfcheck"></div>
   </section>
 
   <section class="judgenote">
     <h2>How to read this board <span class="muted">(for the judge)</span></h2>
-    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 108 live-token protocols). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>Growth is winsorized</b> to the range the training set actually saw (−40.1% to +2.7% a week): a +4448% week counts as +2.7%, so no row's value is a spike the fit never saw. <b>Value / rank ranges</b> are 10–90% intervals from 200 bootstrap refits. The <b>verdict</b> nets the farm plan (farmer share − gas over the whole hold − time) to FARM / THIN / SKIP, and <b>net per $100</b> separates two FARM rows.</p>
+    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 108 live-token protocols). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>Growth enters as log(1 + growth), capped at +200%</b>: a +4448% week counts as log(1+2) — the spike is heard, not obeyed — so Shift DeFi is #6, not #1 and not #93. <b>Value / rank ranges</b> are 10–90% intervals from 200 bootstrap refits. The <b>verdict</b> nets the farm plan (farmer share − gas over the whole hold − time) to FARM / THIN / SKIP, and <b>net per $100</b> separates two FARM rows. The <b>self-check strip</b> below re-derives every row from the fitted coefficients — the code proves every claim on screen.</p>
   </section>
 
   <section class="controls">

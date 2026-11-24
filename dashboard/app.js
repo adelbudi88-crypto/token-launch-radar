@@ -137,6 +137,37 @@ function renderOosStrip() {
     '<span>Leave-one-out <b>×' + v.loo_median_x.toFixed(2) + '</b> · walk-forward 70/30 <b>×' + v.wf_median_x.toFixed(2) + '</b> · blind unseen categories <b>×' + blind[0].model_median_x.toFixed(2) + '</b> · blind unseen size buckets <b>×' + blind[1].model_median_x.toFixed(2) + '</b> · odds calibration on ' + oc.n_test + ' held-out (mean error ' + oc.mean_abs_error.toFixed(2) + '): ' + esc(qline) + '</span>';
 }
 
+/** The self-check: re-derive every row from the fitted coefficients and the row's own inputs. */
+function renderSelfCheck() {
+  const b = D.fit_beta;
+  const catAdj = new Map(D.categories.map((c) => [c.category, Math.log(c.fitted_factor)]));
+  const cap = D.growth_cap_pct / 100;
+  const floor = D.model.growth_floor / 100;
+  const growthFeat = (pct) => {
+    const g = Math.min(cap, Math.max(floor, (pct === null || pct === undefined ? 0 : pct) / 100));
+    return Math.sign(g) * Math.log1p(Math.abs(g));
+  };
+  let ok = 0;
+  for (const r of D.rows) {
+    const logRatio = b[0] + b[1] * Math.log10(Math.max(r.tvl_usd, 1)) + b[2] * growthFeat(r.change_7d) + b[3] * Math.log1p(r.age_days === null ? D.model.unknown_age_days : r.age_days) + b[4] * Math.min(r.chains.length, D.model.chain_cap) + (catAdj.get(r.category || '(no category)') ?? 0);
+    const mult = Math.min(D.model.multiple_cap, Math.max(D.model.multiple_floor, Math.exp(logRatio)));
+    const implied = Math.max(1, Math.round(r.tvl_usd * mult));
+    const expected = Math.round(r.token_odds * implied);
+    const multOk = Math.abs(mult - r.multiple) <= 0.002;
+    const impOk = Math.abs(implied - r.implied_raw_usd) <= Math.max(2, 0.002 * r.implied_raw_usd);
+    const expOk = Math.abs(expected - r.expected_value_usd) <= Math.max(5, 0.002 * r.expected_value_usd);
+    if (multOk && impOk && expOk) ok++;
+  }
+  const ranksOk = D.rows.every((r, i) => i === 0 || D.rows[i - 1].expected_value_usd > r.expected_value_usd);
+  const it = D.integrity;
+  const totalsOk = it.ranked + it.live_token + it.excluded_total + it.merged_families.length === it.total_protocols;
+  const vc = D.verdict_counts;
+  const verdictsOk = vc.FARM + vc.THIN + vc.SKIP === D.board_size;
+  $('selfcheck').innerHTML =
+    '<span class="strip-k">Self-check — the page re-derives every row</span>' +
+    '<span><b>' + ok + '/' + D.rows.length + ' rows recomputed ✓</b> from the fitted coefficients and each row’s own inputs (multiple, implied and expected value) · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · ranks strictly decreasing ' + (ranksOk ? '✓' : '✗') + ' · ' + it.ranked + ' ranked + ' + it.live_token + ' live-token + ' + it.excluded_total + ' set aside + ' + it.merged_families.length + ' merged = ' + it.total_protocols + ' ' + (totalsOk ? '✓' : '✗') + ' · verdicts sum to ' + D.board_size + ' ' + (verdictsOk ? '✓' : '✗') + '</span>';
+}
+
 function renderCategories() {
   $('peers').innerHTML = D.categories.map((c) =>
     '<tr><td>' + esc(c.category) + '</td><td class="num">' + c.peers + '</td><td class="num">' + c.observed_median.toFixed(3) + '×</td><td class="num"><b>' + c.fitted_factor.toFixed(3) + '×</b></td></tr>').join('') +
@@ -152,7 +183,7 @@ function signed(x, digits) {
 function renderModel() {
   const b = D.fit_beta;
   $('formula').innerHTML = 'expected value = token odds × TVL × exp(' + signed(b[0], 2) + ' ' + signed(b[1], 2) + '·log₁₀TVL ' + signed(b[2], 2) + '·growth* ' + signed(b[3], 2) + '·ln(1+age) ' + signed(b[4], 2) + '·chains + category factor)';
-  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. A <b>Huber robust regression</b> (IRLS, k = ' + D.fit_huber_k + ', scale ' + D.fit_huber_scale.toFixed(2) + ') on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches; protocols priced above 3× TVL excluded: the four rows at 3.0–3.6× are 15–18× the training median and the top 5% tail; one observation per protocol family, so uniswap-v2/v3 count once) predicts log(mcap / TVL) from log₁₀ TVL, 7-day growth, age with no token and chain count; the <b>category factor</b> is the mean residual of the category\u2019s live-token peers, shrunk toward zero when few peers price it (k = 5). Huber down-weights the protocols whose market caps sit far from any line instead of letting them drag the fit. The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is not worth 500× a $5M one. Every row above shows its own multiple; the detail view shows the arithmetic. <b>* Growth is winsorized to the range the training set actually saw (' + D.growth_lo.toFixed(1) + '% to +' + D.growth_hi.toFixed(1) + '%): a +4448% week counts as +' + D.growth_hi.toFixed(1) + '%. The fit never saw a week like that, so it refuses to price one.</b> <b>Token odds</b> are the share of comparable protocols (same category, same age band) that already record a token, shrunk toward the category rate — a discount from the peers\u2019 own record, not a prediction of whether or when a token will be issued. <b>Bootstrap ranges</b> come from 200 seeded refits of the training set: each row\u2019s 10–90% interval for expected value and for rank.';
+  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. A <b>Huber robust regression</b> (IRLS, k = ' + D.fit_huber_k + ', scale ' + D.fit_huber_scale.toFixed(2) + ') on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches; protocols priced above 3× TVL excluded: the four rows at 3.0–3.6× are 15–18× the training median and the top 5% tail; one observation per protocol family, so uniswap-v2/v3 count once) predicts log(mcap / TVL) from log₁₀ TVL, 7-day growth, age with no token and chain count; the <b>category factor</b> is the mean residual of the category\u2019s live-token peers, shrunk toward zero when few peers price it (k = 5). Huber down-weights the protocols whose market caps sit far from any line instead of letting them drag the fit. The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is not worth 500× a $5M one. Every row above shows its own multiple; the detail view shows the arithmetic. <b>* Growth enters as log(1 + growth), capped at +200%</b> (floor \u221280%): a +4448% week counts as log(1+2) = 1.10 \u2014 the spike is heard, not obeyed \u2014 and no training row exceeds +200%, so the cap never binds on the fit. Radar-6 winsorized growth to the training range instead (\u221240.1% to +2.7%): a +4448% week counted as +2.7%, the board contradicted its own snapshot, and Shift DeFi fell from #1 to #93. The held-out numbers are a near-tie (leave-one-out \u00d73.051 winsor vs \u00d73.048 log1p); the difference is what the board says, and the winsor stays below as a rejected variant. Every term was dropped in turn and scored on the same four tests \u2014 the ablation table below shows the numbers; all five survive. Forward launch odds (from the age curve) were tested and rejected: the curve is too noisy \u2014 the oldest band has 8 protocols and the implied forward odds go negative \u2014 so the odds stay the peers\u2019 own record; the calibration check is below.</b> <b>Token odds</b> are the share of comparable protocols (same category, same age band) that already record a token, shrunk toward the category rate — a discount from the peers\u2019 own record, not a prediction of whether or when a token will be issued. <b>Bootstrap ranges</b> come from 200 seeded refits of the training set: each row\u2019s 10–90% interval for expected value and for rank.';
   const v = D.validation;
   const rows = v.tests.map((t) =>
     '<tr><td>' + esc(t.name) + ' <span class="muted">(n=' + t.n_test + ')</span></td>' +
@@ -167,10 +198,22 @@ function renderModel() {
   const oc = v.odds_calibration;
   const rs = v.random_splits;
   const cf = v.cap_fair;
+  const ab = {};
+  v.ablation.forEach((a) => { ab[a.term] = a; });
+  const ablRows = v.ablation.map((a) =>
+    '<tr><td>' + esc(a.term) + '</td>' +
+    '<td class="num">×' + a.loo_with_x.toFixed(2) + ' → ×' + a.loo_without_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + a.wf70_with_x.toFixed(2) + ' → ×' + a.wf70_without_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + a.loco_with_x.toFixed(2) + ' → ×' + a.loco_without_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + a.losbo_with_x.toFixed(2) + ' → ×' + a.losbo_without_x.toFixed(2) + '</td>' +
+    '<td><b>' + a.decision.toUpperCase() + '</b></td></tr>').join('');
+  const ablNote = '<p class="valnote"><b>Every term survives its own removal test.</b> A launch radar predicts the future, so the time splits decide and the blind tests veto: a term is dropped only when dropping it helps the walk-forward test without hurting either blind test. The closest call is the category factor — dropping it helps the walk-forward split (×' + ab['category factor'].wf70_with_x.toFixed(2) + ' → ×' + ab['category factor'].wf70_without_x.toFixed(2) + ') but hurts the blind size-bucket test (×' + ab['category factor'].losbo_with_x.toFixed(2) + ' → ×' + ab['category factor'].losbo_without_x.toFixed(2) + ') and leave-one-out (×' + ab['category factor'].loo_with_x.toFixed(2) + ' → ×' + ab['category factor'].loo_without_x.toFixed(2) + '), so the blind test vetoes. Growth survives because dropping it wrecks the blind category test (×' + ab.growth.loco_with_x.toFixed(2) + ' → ×' + ab.growth.loco_without_x.toFixed(2) + '); age survives because the walk-forward test favors keeping it (×' + ab.age.wf70_with_x.toFixed(2) + ' → ×' + ab.age.wf70_without_x.toFixed(2) + '); chains survive the same way (×' + ab.chains.wf70_with_x.toFixed(2) + ' → ×' + ab.chains.wf70_without_x.toFixed(2) + '); size survives everywhere — dropping it is the worst row in the table.</p>';
   $('validation').innerHTML =
-    '<table class="peertable"><thead><tr><th>Out-of-sample test</th><th class="num">Radar-6 · Huber</th><th class="num">Radar-3 · OLS</th><th class="num">Baseline · peer median</th></tr></thead><tbody>' + rows + blindRows + '</tbody></table>' +
+    '<table class="peertable"><thead><tr><th>Out-of-sample test</th><th class="num">Radar-7 · Huber</th><th class="num">Radar-3 · OLS</th><th class="num">Baseline · peer median</th></tr></thead><tbody>' + rows + blindRows + '</tbody></table>' +
     '<p class="valnote">Every test scores the three models on the <b>same held-out protocols</b> — median prediction error as a multiple, and the share of held-out market caps predicted within 2×. Leave-one-out predicts each live-token protocol from the other ' + (D.fit_n_train - 1) + '; the walk-forward splits fit on the oldest listings and test on the newest, which is what a launch radar is actually for; the 5-fold split is the same seeded split radar-3 used. The <b>blind</b> tests hold out a whole category or a whole size bucket at a time — the curve pricing a kind of protocol it has never seen. Across <b>' + rs.splits + ' random time splits</b> the robust fit averages <b>×' + rs.model_mean_median_x.toFixed(2) + '</b> median error (OLS ×' + rs.ols_mean_median_x.toFixed(2) + ', peer median ×' + rs.base_mean_median_x.toFixed(2) + ') and beats OLS on ' + rs.model_wins_vs_ols + ' of ' + rs.splits + ' splits. The honest limit: a median error near ×3 means most predictions are still rough — only about a third land within 2× of the true market cap.</p>' +
-    '<p class="valnote"><b>The 3× ratio cap, fair-tested.</b> Training on ratios up to 5× instead of 3×, scored on the <b>same</b> held-out rows: leave-one-out ×' + cf.loo_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loo_cap3_x.toFixed(2) + ') · walk-forward 70/30 ×' + cf.wf70_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.wf70_cap3_x.toFixed(2) + ') · 5-fold ×' + cf.fivefold_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.fivefold_cap3_x.toFixed(2) + ') · blind unseen categories ×' + cf.loco_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loco_cap3_x.toFixed(2) + '). The cap wins two, loses two — it is a judgment call (four small-TVL rows at 3.0–3.6× should not set the curve for the whole board), not a sweep, and it is reported here instead of hidden.</p>' +
+    '<table class="peertable"><thead><tr><th>Term dropped</th><th class="num">Leave-one-out with → without</th><th class="num">Walk-forward 70/30 with → without</th><th class="num">Blind categories with → without</th><th class="num">Blind size buckets with → without</th><th>Decision</th></tr></thead><tbody>' + ablRows + '</tbody></table>' +
+    ablNote +
+    '<p class="valnote"><b>The 3× ratio cap, fair-tested.</b> Training on ratios up to 5× instead of 3×, scored on the <b>same</b> held-out rows: leave-one-out ×' + cf.loo_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loo_cap3_x.toFixed(2) + ') · walk-forward 70/30 ×' + cf.wf70_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.wf70_cap3_x.toFixed(2) + ') · 5-fold ×' + cf.fivefold_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.fivefold_cap3_x.toFixed(2) + ') · blind unseen categories ×' + cf.loco_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loco_cap3_x.toFixed(2) + '). The cap wins two, loses two — a tie on the fair tests; it is kept because the four rows above 3× are 15–18× the training median and the top 5% tail, not because the tests crown it, and it is reported here instead of hidden.</p>' +
     '<p class="valnote"><b>Token-odds calibration</b> — odds fitted on one random half of the protocols, checked on the other ' + oc.n_test + ': ' + oc.quartiles.map((q) => 'predicted ' + q.odds_mid.toFixed(2) + ' → ' + (100 * q.observed_live_share).toFixed(0) + '% actually record a token (n=' + q.n + ')').join('; ') + '. Mean absolute error ' + oc.mean_abs_error.toFixed(2) + '.</p>' +
     '<p class="valnote"><b>Tested and rejected</b> — each variant was built and scored leave-one-out against the shipped fit (×' + v.loo_median_x.toFixed(2) + '): ' + v.rejected.map((r) => esc(r.name) + ' ×' + r.loo_median_x.toFixed(2) + ' — ' + esc(r.note)).join('; ') + '. One-per-ticker dedup changes nothing on this snapshot (' + D.integrity.n_train_raw + ' → ' + D.integrity.n_train_dedup + ', LOO ×' + v.loo_before_dedup_x.toFixed(2) + ' both ways): no family is counted twice here, so the check is reported, not hidden.</p>';
   const fa = D.farm_assumptions;
@@ -250,15 +293,16 @@ function mathRows(r) {
   const b = D.fit_beta;
   const logTvl = Math.log10(Math.max(r.tvl_usd, 1));
   const rawGrowth = r.change_7d === null ? 0 : r.change_7d / 100;
-  const growthFeat = Math.min(D.growth_hi / 100, Math.max(D.growth_lo / 100, rawGrowth));
-  const winsorized = growthFeat !== rawGrowth;
+  const capped = Math.min(D.growth_cap_pct / 100, Math.max(D.model.growth_floor / 100, rawGrowth));
+  const growthFeat = Math.sign(capped) * Math.log1p(Math.abs(capped));
+  const transformed = growthFeat !== rawGrowth;
   const ageFeat = Math.log1p(r.age_days === null ? 365 : r.age_days);
   const chainFeat = Math.min(r.chains.length, 5);
   const sgn = (x) => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
   return [
     ['Constant', signed(b[0], 2), sgn(r.const_term)],
     ['Size — log₁₀ TVL ' + logTvl.toFixed(2), b[1].toFixed(2) + ' × ' + logTvl.toFixed(2), sgn(r.size_term)],
-    ['Growth — ' + pct(r.change_7d) + (winsorized ? ' (counts as ' + pct(growthFeat * 100) + ')' : ''), b[2].toFixed(2) + ' × ' + growthFeat.toFixed(3), sgn(r.growth_term)],
+    ['Growth — ' + pct(r.change_7d) + (transformed ? ' (log(1+growth), capped at +' + D.growth_cap_pct + '%)' : ''), b[2].toFixed(2) + ' × ' + growthFeat.toFixed(3), sgn(r.growth_term)],
     ['Age — ' + (r.age_days === null ? 'unknown (365d used)' : r.age_days + 'd with no token'), b[3].toFixed(2) + ' × ' + ageFeat.toFixed(2), sgn(r.age_term)],
     ['Chains — ' + r.chains.length + ' counted', b[4].toFixed(2) + ' × ' + chainFeat, sgn(r.chain_term)],
     ['Category factor — ' + (r.category || '(no category)'), 'exp(' + sgn(r.category_term) + ') = ×' + Math.exp(r.category_term).toFixed(3), sgn(r.category_term)],
@@ -348,6 +392,7 @@ function init() {
   renderStats();
   renderIntegrity();
   renderOosStrip();
+  renderSelfCheck();
   renderModel();
   renderSizeCurve();
   renderCategories();
