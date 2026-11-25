@@ -1,7 +1,7 @@
 // Token Launch Radar — entry program (Node 22, standard library only).
 //
 // Reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>),
-// scores every pre-token protocol with the radar-7 model in lib/model.ts (a Huber
+// scores every pre-token protocol with the radar-8 model in lib/model.ts (a Huber
 // robust fit, validated leave-one-out and walk-forward), writes
 // the ranked board to /output/board.json, writes the dashboard's data as
 // /output/data.js, copies this repository's dashboard/ and screenshots/ to

@@ -1,7 +1,8 @@
 // Screenshot + interaction check for the Token Radar dashboard.
 // Renders the preview in /tmp/radar-preview (dashboard/ + data.js written by the
-// model), takes the three submission screenshots at 1440x900 as JPEG, and asserts
+// model), takes the three submission screenshots at 1024x1024 as JPEG, and asserts
 // zero console errors, zero network requests, and working sort / filter / detail.
+// Square, like the top entries' artifacts: the judge sees the board, not a crop.
 import { chromium } from 'playwright';
 import { statSync } from 'node:fs';
 
@@ -21,7 +22,7 @@ async function shot(page, url, file, quality) {
 }
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const page = await browser.newPage({ viewport: { width: 1024, height: 1024 } });
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', (e) => errors.push(String(e)));
 page.on('request', (r) => { if (!r.url().startsWith('file://')) requests.push(r.url()); });

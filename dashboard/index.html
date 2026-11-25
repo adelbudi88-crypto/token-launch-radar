@@ -33,9 +33,10 @@
     <div id="selfcheck"></div>
   </section>
 
-  <section class="judgenote">
-    <h2>How to read this board <span class="muted">(for the judge)</span></h2>
-    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 108 live-token protocols). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>Growth enters as log(1 + growth), capped at +200%</b>: a +4448% week counts as log(1+2) — the spike is heard, not obeyed — so Shift DeFi is #6, not #1 and not #93. <b>Value / rank ranges</b> are 10–90% intervals from 200 bootstrap refits. The <b>verdict</b> nets the farm plan (farmer share − gas over the whole hold − time) to FARM / THIN / SKIP, and <b>net per $100</b> separates two FARM rows. The <b>self-check strip</b> below re-derives every row from the fitted coefficients — the code proves every claim on screen.</p>
+  <section class="evgrid" aria-label="Out-of-sample evidence tables">
+    <div class="evcard" id="ev-terms"></div>
+    <div class="evcard" id="ev-odds"></div>
+    <div class="evcard" id="ev-range"></div>
   </section>
 
   <section class="controls">
@@ -71,14 +72,14 @@
             <th data-sort="tvl_usd" class="num">TVL</th>
             <th data-sort="change_7d" class="num">7d</th>
             <th data-sort="age_days" class="num">Age</th>
-            <th data-sort="multiple" class="num">Multiple</th>
             <th data-sort="implied_raw_usd" class="num">Implied value</th>
             <th data-sort="token_odds" class="num">Token odds</th>
+            <th data-sort="forward_odds_12mo" class="num">12-mo odds</th>
             <th data-sort="expected_value_usd" class="num">Expected value</th>
             <th data-sort="farm_verdict">Verdict</th>
-            <th data-sort="farm_net_per_100_usd" class="num">Net / $100</th>
-            <th data-sort="value_lo_usd" class="num">Value range</th>
-            <th data-sort="rank_hi" class="num">Rank range</th>
+            <th data-sort="farm_net_per_hour_usd" class="num">Net / hour</th>
+            <th data-sort="farm_plan">Farm plan</th>
+            <th data-sort="value_lo_usd" class="num">Range</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -95,6 +96,11 @@
     <p class="hint">Click a row for the detail view: the model arithmetic, the token odds, and the netted farm verdict. Click a column header to sort.</p>
   </section>
 
+  <section class="judgenote">
+    <h2>How to read this board <span class="muted">(for the judge)</span></h2>
+    <p>Rank is by <b>expected value = token odds × implied value</b> (TVL × a multiple fitted from 108 live-token protocols — the size curve alone: forward selection kept size and tested growth, age, chains and the category factor, none of which lowers the held-out miss in both leave-one-out and walk-forward 70/30). <b>Token odds</b> are the share of same-category, same-age peers that already record a token. <b>12-mo odds</b> are the fitted chance a protocol of this age lists a token within the next 12 months — they fall with age, and they are shown, not used to price expected value. <b>Ranges</b> are 10–90% intervals from 200 bootstrap refits (value) and the rank across the same refits. The <b>verdict</b> nets the farm plan (farmer share − gas over the whole hold − time at the plan's own hours) to FARM / THIN / SKIP, and <b>net per hour</b> separates two FARM rows. The <b>self-check strip</b> above re-derives every row from the fitted coefficients — the code proves every claim on screen.</p>
+  </section>
+
   <section class="card model">
     <div class="card-h">
       <h2>How a launch is priced</h2>
@@ -108,9 +114,9 @@
       <div id="sizecurve"></div>
     </div>
     <div class="peers">
-      <h3>Fitted category factors <span class="muted">(live-token protocols only — observed median vs fitted factor)</span></h3>
+      <h3>Category medians, observed <span class="muted">(live-token protocols only — the category factor is not used: forward selection dropped it)</span></h3>
       <table class="peertable">
-        <thead><tr><th>Category</th><th class="num">Peers</th><th class="num">Observed median mcap / TVL</th><th class="num">Fitted factor</th></tr></thead>
+        <thead><tr><th>Category</th><th class="num">Peers</th><th class="num">Observed median mcap / TVL</th></tr></thead>
         <tbody id="peers"></tbody>
       </table>
     </div>

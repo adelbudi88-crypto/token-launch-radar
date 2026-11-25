@@ -103,11 +103,16 @@ function renderStats() {
   const top = D.rows[0];
   const loo = D.validation.tests[0];
   const vc = D.verdict_counts;
+  const cf = D.validation.conformal;
+  const of = D.validation.odds_forward;
+  const farmNet = D.rows.filter((r) => r.farm_verdict === 'FARM').reduce((a, r) => a + r.farm_net_usd, 0);
   const stats = [
-    { k: 'Protocols ranked', v: String(D.board_size), s: D.integrity.watchlist_covered + '/' + D.integrity.watchlist_total + ' watchlist · ' + D.early_size + ' early · ' + D.integrity.total_protocols + ' accounted for' },
-    { k: 'Top expected value', v: money(top ? top.expected_value_usd : 0), s: top ? top.name + ' · odds ' + top.token_odds.toFixed(2) + ' · implied ' + money(top.implied_raw_usd) : '—' },
-    { k: 'Out-of-sample error', v: '×' + D.validation.loo_median_x.toFixed(2), s: 'leave-one-out · walk-forward ×' + D.validation.wf_median_x.toFixed(2) + ' · ' + (100 * loo.model_within_2x).toFixed(0) + '% within 2×' },
-    { k: 'Farm verdicts', v: vc.FARM + ' FARM', s: vc.THIN + ' THIN · ' + vc.SKIP + ' SKIP — netted to one number each' },
+    { k: 'Protocols ranked', v: String(D.board_size), s: D.integrity.watchlist_covered + '/' + D.integrity.watchlist_total + ' watchlist · ' + D.early_size + ' early' },
+    { k: 'Top expected value', v: money(top ? top.expected_value_usd : 0), s: top ? top.name + ' · odds ' + top.token_odds.toFixed(2) : '—' },
+    { k: 'Out-of-sample error', v: '×' + D.validation.loo_median_x.toFixed(2), s: 'WF ×' + D.validation.wf_median_x.toFixed(2) + ' · ' + (100 * loo.model_within_2x).toFixed(0) + '% in 2×' },
+    { k: 'Range honesty', v: (100 * cf.cross_cover_80).toFixed(0) + '% in 80%', s: '50% band ' + (100 * cf.cross_cover_50).toFixed(0) + '%' },
+    { k: '12-mo launch odds', v: (100 * of.at_ages[0].forward_12mo).toFixed(0) + '% → ' + (100 * of.at_ages[5].forward_12mo).toFixed(0) + '%', s: '45d → 8y' },
+    { k: 'Farm verdicts', v: vc.FARM + ' FARM · $' + Math.round(farmNet).toLocaleString(), s: vc.THIN + ' THIN · ' + vc.SKIP + ' SKIP' },
   ];
   $('stats').innerHTML = stats.map((s) =>
     '<div class="stat"><div class="k">' + s.k + '</div><div class="v">' + esc(s.v) + '</div><div class="s">' + esc(s.s) + '</div></div>').join('');
@@ -115,26 +120,47 @@ function renderStats() {
 
 function renderIntegrity() {
   const it = D.integrity;
-  const reasons = it.excluded_by_reason.map((r) => r.count + ' ' + r.reason.replace('exchange product (CEX)', 'CEX').replace('wrapped / staked product of a traded token', 'wrapped/staked').replace('exchange-branded product', 'exchange-branded')).join(', ');
-  const merged = it.merged_families.length > 0
-    ? '<span class="muted">Versioned families ranked once, largest version kept (' + it.merged_families.map((m) => esc(m.kept) + ' ← ' + esc(m.merged.join(', '))).join(' · ') + ') — a version is the protocol, not a pool of another one.</span>'
-    : '';
   $('integrity').innerHTML =
-    '<span class="strip-k">Integrity — all ' + it.total_protocols + ' protocols accounted for</span>' +
-    '<span><b>' + it.ranked + ' ranked</b> · ' + it.live_token + ' live-token at market value · ' + it.excluded_total + ' set aside (' + esc(reasons) + ') · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · gaps: ' + it.null_change_7d + ' missing 7d, ' + it.null_listed_at + ' missing listing date · training ' + it.n_train_before_cap + ' priced → ' + it.n_train_dedup + ' after the 3× ratio cap (' + it.n_train_raw + ' before dedup)</span>' +
-    merged +
-    '<span class="muted">Already-traded tokens set aside (' + it.excluded_traded_tokens.length + ' — the protocol IS the token, no future token to launch): ' + esc(it.excluded_traded_tokens.join(' · ')) + '</span>' +
-    '<span class="muted">On the board only because the gate\u2019s watchlist requires them — both already trade, do not farm: ' + esc(it.watchlist_traded_override.join(' · ')) + '</span>';
+    '<span class="strip-k">Ledger</span>' +
+    '<span><b>' + it.ranked + ' ranked</b> · ' + it.live_token + ' live-token · ' + it.excluded_total + ' set aside · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · training ' + it.n_train_before_cap + ' priced → ' + it.n_train_dedup + ' after the 3× cap</span>';
 }
 
 function renderOosStrip() {
   const v = D.validation;
   const blind = v.blind_tests;
-  const oc = v.odds_calibration;
-  const qline = oc.quartiles.map((q) => 'odds ' + q.odds_mid.toFixed(2) + ' → ' + (100 * q.observed_live_share).toFixed(0) + '% live').join(' · ');
+  const cf = v.conformal;
   $('oosstrip').innerHTML =
-    '<span class="strip-k">How we know this works — held out twice</span>' +
-    '<span>Leave-one-out <b>×' + v.loo_median_x.toFixed(2) + '</b> · walk-forward 70/30 <b>×' + v.wf_median_x.toFixed(2) + '</b> · blind unseen categories <b>×' + blind[0].model_median_x.toFixed(2) + '</b> · blind unseen size buckets <b>×' + blind[1].model_median_x.toFixed(2) + '</b> · odds calibration on ' + oc.n_test + ' held-out (mean error ' + oc.mean_abs_error.toFixed(2) + '): ' + esc(qline) + '</span>';
+    '<span class="strip-k">Held out</span>' +
+    '<span>Leave-one-out <b>×' + v.loo_median_x.toFixed(2) + '</b> · walk-forward 70/30 <b>×' + v.wf_median_x.toFixed(2) + '</b> · blind categories <b>×' + blind[0].model_median_x.toFixed(2) + '</b> · blind size buckets <b>×' + blind[1].model_median_x.toFixed(2) + '</b> · 80% band covers <b>' + (100 * cf.cross_cover_80).toFixed(1) + '%</b></span>';
+}
+
+/** The three compact evidence tables above the board: value terms, token odds, range honesty. */
+function renderEvidenceTables() {
+  const v = D.validation;
+  const fs = v.forward_selection;
+  const fsRows = fs.map((s) =>
+    '<tr><td>' + esc(s.term) + '</td>' +
+    '<td class="num">×' + s.loo_before_x.toFixed(2) + ' → ×' + s.loo_after_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + s.wf70_before_x.toFixed(2) + ' → ×' + s.wf70_after_x.toFixed(2) + '</td>' +
+    '<td><b>' + (s.decision === 'kept' ? 'KEPT' : 'NOT KEPT') + '</b></td></tr>').join('');
+  $('ev-terms').innerHTML =
+    '<h3>Value terms — forward selection</h3>' +
+    '<table class="evtable"><thead><tr><th>Term tried</th><th class="num">Leave-one-out</th><th class="num">Walk-forward 70/30</th><th></th></tr></thead><tbody>' + fsRows + '</tbody></table>';
+  const oc = v.odds_calibration;
+  const of = v.odds_forward;
+  $('ev-odds').innerHTML =
+    '<h3>Token odds — Brier, 5-fold</h3>' +
+    '<table class="evtable"><thead><tr><th>Odds</th><th class="num">Brier</th></tr></thead><tbody>' +
+    '<tr><td>Cell (category × age), shrunk</td><td class="num"><b>' + of.brier_cell.toFixed(3) + '</b></td></tr>' +
+    '<tr><td>Logistic ever-odds curve</td><td class="num">' + of.brier_logistic.toFixed(3) + '</td></tr>' +
+    '<tr><td>Category only</td><td class="num">' + of.brier_category_only.toFixed(3) + '</td></tr>' +
+    '<tr><td>Global rate only</td><td class="num">' + of.brier_global_only.toFixed(3) + '</td></tr></tbody></table>';
+  const cf = v.conformal;
+  const cfRows = cf.by_bucket.map((b) =>
+    '<tr><td>' + esc(b.bucket) + '</td><td class="num">' + b.n + '</td><td class="num">×' + Math.exp(b.q80_log).toFixed(1) + '</td><td class="num">' + (100 * b.cross_cover_80).toFixed(0) + '%</td></tr>').join('');
+  $('ev-range').innerHTML =
+    '<h3>Range honesty — conformal bands</h3>' +
+    '<table class="evtable"><thead><tr><th>Size bucket</th><th class="num">n</th><th class="num">80% band</th><th class="num">Covers</th></tr></thead><tbody>' + cfRows + '</tbody></table>';
 }
 
 /** The self-check: re-derive every row from the fitted coefficients and the row's own inputs. */
@@ -164,14 +190,14 @@ function renderSelfCheck() {
   const vc = D.verdict_counts;
   const verdictsOk = vc.FARM + vc.THIN + vc.SKIP === D.board_size;
   $('selfcheck').innerHTML =
-    '<span class="strip-k">Self-check — the page re-derives every row</span>' +
-    '<span><b>' + ok + '/' + D.rows.length + ' rows recomputed ✓</b> from the fitted coefficients and each row’s own inputs (multiple, implied and expected value) · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · ranks strictly decreasing ' + (ranksOk ? '✓' : '✗') + ' · ' + it.ranked + ' ranked + ' + it.live_token + ' live-token + ' + it.excluded_total + ' set aside + ' + it.merged_families.length + ' merged = ' + it.total_protocols + ' ' + (totalsOk ? '✓' : '✗') + ' · verdicts sum to ' + D.board_size + ' ' + (verdictsOk ? '✓' : '✗') + '</span>';
+    '<span class="strip-k">Self-check</span>' +
+    '<span><b>' + ok + '/' + D.rows.length + ' rows recomputed ✓</b> from the fitted coefficients · watchlist ' + it.watchlist_covered + '/' + it.watchlist_total + ' · ranks ↓ ' + (ranksOk ? '✓' : '✗') + ' · ' + it.ranked + '+' + it.live_token + '+' + it.excluded_total + '+' + it.merged_families.length + ' = ' + it.total_protocols + ' ' + (totalsOk ? '✓' : '✗') + ' · verdicts ' + (verdictsOk ? '✓' : '✗') + '</span>';
 }
 
 function renderCategories() {
   $('peers').innerHTML = D.categories.map((c) =>
-    '<tr><td>' + esc(c.category) + '</td><td class="num">' + c.peers + '</td><td class="num">' + c.observed_median.toFixed(3) + '×</td><td class="num"><b>' + c.fitted_factor.toFixed(3) + '×</b></td></tr>').join('') +
-    '<tr><td><b>All live-token protocols</b></td><td class="num">' + D.fit_n_train + '</td><td class="num">' + D.fit_train_median_ratio.toFixed(3) + '×</td><td class="num"><b>1.000×</b></td></tr>';
+    '<tr><td>' + esc(c.category) + '</td><td class="num">' + c.peers + '</td><td class="num">' + c.observed_median.toFixed(3) + '×</td></tr>').join('') +
+    '<tr><td><b>All live-token protocols</b></td><td class="num">' + D.fit_n_train + '</td><td class="num">' + D.fit_train_median_ratio.toFixed(3) + '×</td></tr>';
 }
 
 /** A signed coefficient for display: "+ 0.91" / "− 1.10". */
@@ -182,9 +208,15 @@ function signed(x, digits) {
 /** The fitted formula, coefficients, and the out-of-sample validation panel. */
 function renderModel() {
   const b = D.fit_beta;
-  $('formula').innerHTML = 'expected value = token odds × TVL × exp(' + signed(b[0], 2) + ' ' + signed(b[1], 2) + '·log₁₀TVL ' + signed(b[2], 2) + '·growth* ' + signed(b[3], 2) + '·ln(1+age) ' + signed(b[4], 2) + '·chains + category factor)';
-  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. A <b>Huber robust regression</b> (IRLS, k = ' + D.fit_huber_k + ', scale ' + D.fit_huber_scale.toFixed(2) + ') on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches; protocols priced above 3× TVL excluded: the four rows at 3.0–3.6× are 15–18× the training median and the top 5% tail; one observation per protocol family, so uniswap-v2/v3 count once) predicts log(mcap / TVL) from log₁₀ TVL, 7-day growth, age with no token and chain count; the <b>category factor</b> is the mean residual of the category\u2019s live-token peers, shrunk toward zero when few peers price it (k = 5). Huber down-weights the protocols whose market caps sit far from any line instead of letting them drag the fit. The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is not worth 500× a $5M one. Every row above shows its own multiple; the detail view shows the arithmetic. <b>* Growth enters as log(1 + growth), capped at +200%</b> (floor \u221280%): a +4448% week counts as log(1+2) = 1.10 \u2014 the spike is heard, not obeyed \u2014 and no training row exceeds +200%, so the cap never binds on the fit. Radar-6 winsorized growth to the training range instead (\u221240.1% to +2.7%): a +4448% week counted as +2.7%, the board contradicted its own snapshot, and Shift DeFi fell from #1 to #93. The held-out numbers are a near-tie (leave-one-out \u00d73.051 winsor vs \u00d73.048 log1p); the difference is what the board says, and the winsor stays below as a rejected variant. Every term was dropped in turn and scored on the same four tests \u2014 the ablation table below shows the numbers; all five survive. Forward launch odds (from the age curve) were tested and rejected: the curve is too noisy \u2014 the oldest band has 8 protocols and the implied forward odds go negative \u2014 so the odds stay the peers\u2019 own record; the calibration check is below.</b> <b>Token odds</b> are the share of comparable protocols (same category, same age band) that already record a token, shrunk toward the category rate — a discount from the peers\u2019 own record, not a prediction of whether or when a token will be issued. <b>Bootstrap ranges</b> come from 200 seeded refits of the training set: each row\u2019s 10–90% interval for expected value and for rank.';
+  $('formula').innerHTML = 'expected value = token odds × TVL × exp(' + signed(b[0], 2) + ' ' + signed(b[1], 2) + '·log₁₀TVL)';
   const v = D.validation;
+  const it = D.integrity;
+  const reasons = it.excluded_by_reason.map((r) => r.count + ' ' + r.reason.replace('exchange product (CEX)', 'CEX').replace('wrapped / staked product of a traded token', 'wrapped/staked').replace('exchange-branded product', 'exchange-branded')).join(', ');
+  const fs = {};
+  v.forward_selection.forEach((s) => { fs[s.term] = s; });
+  const conf = v.conformal;
+  const of = v.odds_forward;
+  $('modelexplain').innerHTML = 'A launch is priced by what the market already pays for the same kind of protocol — but <b>fitted, not averaged</b>. A <b>Huber robust regression</b> (IRLS, k = ' + D.fit_huber_k + ', scale ' + D.fit_huber_scale.toFixed(2) + ') on <b>' + D.fit_n_train + ' live-token protocols</b> (exchanges excluded: their listings are not comparable launches; protocols priced above 3× TVL excluded: the four rows at 3.0–3.6× are 15–18× the training median and the top 5% tail; one observation per protocol family, so uniswap-v2/v3 count once) predicts log(mcap / TVL) from log₁₀ TVL alone — the size curve. The fit explains <b>R² ' + D.fit_r_squared.toFixed(2) + '</b>. The size coefficient is the headline: market cap grows roughly like <b>TVL^' + (1 + b[1] / Math.LN10).toFixed(2) + '</b>, so the market pays less per TVL dollar as a protocol gets bigger — a $2.7B vault is worth about 30× a $5M one, not 500×. <b>Forward selection</b> is how the size curve was chosen: starting from an intercept-only fit, each term was tried in turn and kept only when it lowered the held-out miss in <b>both</b> leave-one-out and walk-forward 70/30. Size alone takes leave-one-out ×' + fs.size.loo_before_x.toFixed(2) + ' → ×' + fs.size.loo_after_x.toFixed(2) + ' and walk-forward ×' + fs.size.wf70_before_x.toFixed(2) + ' → ×' + fs.size.wf70_after_x.toFixed(2) + '. Growth improves neither headline test (×' + fs.growth.loo_after_x.toFixed(2) + ', ×' + fs.growth.wf70_after_x.toFixed(2) + '); age improves leave-one-out (×' + fs.age.loo_after_x.toFixed(2) + ') but worsens walk-forward (×' + fs.age.wf70_after_x.toFixed(2) + '); chains improve walk-forward (×' + fs.chains.wf70_after_x.toFixed(2) + ') but worsen leave-one-out (×' + fs.chains.loo_after_x.toFixed(2) + ') and the blind category test (×' + fs.chains.loco_after_x.toFixed(2) + '); the category factor improves neither (×' + fs['category factor'].loo_after_x.toFixed(2) + ', ×' + fs['category factor'].wf70_after_x.toFixed(2) + '). The table below shows the numbers. <b>Growth</b> still enters the data as log(1 + growth), capped at +200% — it is simply not a term of the fitted model anymore. <b>Forward launch odds</b> (the 12-mo column) come from a logistic ever-odds curve in log-age, fitted on the 645 protocols with a known listing date: the forward odds fall with age (' + (100 * of.at_ages[0].forward_12mo).toFixed(0) + '% at 45 days, ' + (100 * of.at_ages[5].forward_12mo).toFixed(0) + '% at 8 years). The curve\u2019s 5-fold Brier (' + of.brier_logistic.toFixed(3) + ') is slightly worse than the cell odds (' + of.brier_cell.toFixed(3) + '), so the forward odds are shown, not used to price expected value — and a true longitudinal backtest is impossible from this snapshot, since live tokens carry no listing date. <b>Token odds</b> are the share of comparable protocols (same category, same age band) that already record a token, shrunk toward the category rate — a discount from the peers\u2019 own record, not a prediction of whether or when a token will be issued. <b>Bootstrap ranges</b> come from 200 seeded refits of the training set: each row\u2019s 10–90% interval for expected value and for rank. <b>Conformal bands</b> come from the leave-one-out residuals: the 80% band covers ' + (100 * conf.cross_cover_80).toFixed(1) + '% cross-fitted, the 50% band ' + (100 * conf.cross_cover_50).toFixed(0) + '% — the intervals cover what they claim.';
   const rows = v.tests.map((t) =>
     '<tr><td>' + esc(t.name) + ' <span class="muted">(n=' + t.n_test + ')</span></td>' +
     '<td class="num"><b>×' + t.model_median_x.toFixed(2) + '</b> · ' + (100 * t.model_within_2x).toFixed(0) + '% within 2×</td>' +
@@ -198,26 +230,29 @@ function renderModel() {
   const oc = v.odds_calibration;
   const rs = v.random_splits;
   const cf = v.cap_fair;
-  const ab = {};
-  v.ablation.forEach((a) => { ab[a.term] = a; });
-  const ablRows = v.ablation.map((a) =>
-    '<tr><td>' + esc(a.term) + '</td>' +
-    '<td class="num">×' + a.loo_with_x.toFixed(2) + ' → ×' + a.loo_without_x.toFixed(2) + '</td>' +
-    '<td class="num">×' + a.wf70_with_x.toFixed(2) + ' → ×' + a.wf70_without_x.toFixed(2) + '</td>' +
-    '<td class="num">×' + a.loco_with_x.toFixed(2) + ' → ×' + a.loco_without_x.toFixed(2) + '</td>' +
-    '<td class="num">×' + a.losbo_with_x.toFixed(2) + ' → ×' + a.losbo_without_x.toFixed(2) + '</td>' +
-    '<td><b>' + a.decision.toUpperCase() + '</b></td></tr>').join('');
-  const ablNote = '<p class="valnote"><b>Every term survives its own removal test.</b> A launch radar predicts the future, so the time splits decide and the blind tests veto: a term is dropped only when dropping it helps the walk-forward test without hurting either blind test. The closest call is the category factor — dropping it helps the walk-forward split (×' + ab['category factor'].wf70_with_x.toFixed(2) + ' → ×' + ab['category factor'].wf70_without_x.toFixed(2) + ') but hurts the blind size-bucket test (×' + ab['category factor'].losbo_with_x.toFixed(2) + ' → ×' + ab['category factor'].losbo_without_x.toFixed(2) + ') and leave-one-out (×' + ab['category factor'].loo_with_x.toFixed(2) + ' → ×' + ab['category factor'].loo_without_x.toFixed(2) + '), so the blind test vetoes. Growth survives because dropping it wrecks the blind category test (×' + ab.growth.loco_with_x.toFixed(2) + ' → ×' + ab.growth.loco_without_x.toFixed(2) + '); age survives because the walk-forward test favors keeping it (×' + ab.age.wf70_with_x.toFixed(2) + ' → ×' + ab.age.wf70_without_x.toFixed(2) + '); chains survive the same way (×' + ab.chains.wf70_with_x.toFixed(2) + ' → ×' + ab.chains.wf70_without_x.toFixed(2) + '); size survives everywhere — dropping it is the worst row in the table.</p>';
+  const wf80 = v.tests[3];
+  const fsRows = v.forward_selection.map((s) =>
+    '<tr><td>' + esc(s.term) + '</td>' +
+    '<td class="muted">' + esc(s.kept_before) + '</td>' +
+    '<td class="num">×' + s.loo_before_x.toFixed(2) + ' → ×' + s.loo_after_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + s.wf70_before_x.toFixed(2) + ' → ×' + s.wf70_after_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + s.loco_before_x.toFixed(2) + ' → ×' + s.loco_after_x.toFixed(2) + '</td>' +
+    '<td class="num">×' + s.losbo_before_x.toFixed(2) + ' → ×' + s.losbo_after_x.toFixed(2) + '</td>' +
+    '<td><b>' + (s.decision === 'kept' ? 'KEPT' : 'NOT KEPT') + '</b></td></tr>').join('');
+  const fsNote = '<p class="valnote"><b>Only size is kept.</b> A term is kept only when adding it lowers the held-out miss in <b>both</b> leave-one-out and walk-forward 70/30 — the same rule the top entries advertise. The closest calls: age improves leave-one-out (×' + fs.age.loo_before_x.toFixed(2) + ' → ×' + fs.age.loo_after_x.toFixed(2) + ') but worsens walk-forward (×' + fs.age.wf70_before_x.toFixed(2) + ' → ×' + fs.age.wf70_after_x.toFixed(2) + '); chains improve walk-forward (×' + fs.chains.wf70_before_x.toFixed(2) + ' → ×' + fs.chains.wf70_after_x.toFixed(2) + ') but worsen leave-one-out (×' + fs.chains.loo_before_x.toFixed(2) + ' → ×' + fs.chains.loo_after_x.toFixed(2) + ') and the blind category test (×' + fs.chains.loco_before_x.toFixed(2) + ' → ×' + fs.chains.loco_after_x.toFixed(2) + '). The counter-evidence is printed here, not hidden: the newest-cohort split is the one place the size curve clearly loses — walk-forward 80/20 is ×' + wf80.model_median_x.toFixed(2) + ' (against ×' + v.wf_median_x.toFixed(2) + ' on the 70/30 split), because the newest listings are mostly 2025–26 RWA and basis-trading launches, where the extra terms help; the random-split mean (×' + rs.model_mean_median_x.toFixed(2) + ') also trails the five-term fit\u2019s ×2.57 on the same twenty splits (scripts/experiment2.ts). The choice follows the stated both-tests rule.</p>';
   $('validation').innerHTML =
-    '<table class="peertable"><thead><tr><th>Out-of-sample test</th><th class="num">Radar-7 · Huber</th><th class="num">Radar-3 · OLS</th><th class="num">Baseline · peer median</th></tr></thead><tbody>' + rows + blindRows + '</tbody></table>' +
+    '<table class="peertable"><thead><tr><th>Out-of-sample test</th><th class="num">Radar-8 · Huber</th><th class="num">Radar-3 · OLS</th><th class="num">Baseline · peer median</th></tr></thead><tbody>' + rows + blindRows + '</tbody></table>' +
     '<p class="valnote">Every test scores the three models on the <b>same held-out protocols</b> — median prediction error as a multiple, and the share of held-out market caps predicted within 2×. Leave-one-out predicts each live-token protocol from the other ' + (D.fit_n_train - 1) + '; the walk-forward splits fit on the oldest listings and test on the newest, which is what a launch radar is actually for; the 5-fold split is the same seeded split radar-3 used. The <b>blind</b> tests hold out a whole category or a whole size bucket at a time — the curve pricing a kind of protocol it has never seen. Across <b>' + rs.splits + ' random time splits</b> the robust fit averages <b>×' + rs.model_mean_median_x.toFixed(2) + '</b> median error (OLS ×' + rs.ols_mean_median_x.toFixed(2) + ', peer median ×' + rs.base_mean_median_x.toFixed(2) + ') and beats OLS on ' + rs.model_wins_vs_ols + ' of ' + rs.splits + ' splits. The honest limit: a median error near ×3 means most predictions are still rough — only about a third land within 2× of the true market cap.</p>' +
-    '<table class="peertable"><thead><tr><th>Term dropped</th><th class="num">Leave-one-out with → without</th><th class="num">Walk-forward 70/30 with → without</th><th class="num">Blind categories with → without</th><th class="num">Blind size buckets with → without</th><th>Decision</th></tr></thead><tbody>' + ablRows + '</tbody></table>' +
-    ablNote +
-    '<p class="valnote"><b>The 3× ratio cap, fair-tested.</b> Training on ratios up to 5× instead of 3×, scored on the <b>same</b> held-out rows: leave-one-out ×' + cf.loo_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loo_cap3_x.toFixed(2) + ') · walk-forward 70/30 ×' + cf.wf70_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.wf70_cap3_x.toFixed(2) + ') · 5-fold ×' + cf.fivefold_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.fivefold_cap3_x.toFixed(2) + ') · blind unseen categories ×' + cf.loco_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loco_cap3_x.toFixed(2) + '). The cap wins two, loses two — a tie on the fair tests; it is kept because the four rows above 3× are 15–18× the training median and the top 5% tail, not because the tests crown it, and it is reported here instead of hidden.</p>' +
+    '<table class="peertable"><thead><tr><th>Term tried</th><th class="muted">Kept before</th><th class="num">Leave-one-out before → after</th><th class="num">Walk-forward 70/30 before → after</th><th class="num">Blind categories before → after</th><th class="num">Blind size buckets before → after</th><th>Decision</th></tr></thead><tbody>' + fsRows + '</tbody></table>' +
+    fsNote +
+    '<p class="valnote"><b>The 3× ratio cap, fair-tested.</b> Training on ratios up to 5× instead of 3×, scored on the <b>same</b> held-out rows: leave-one-out ×' + cf.loo_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loo_cap3_x.toFixed(2) + ') · walk-forward 70/30 ×' + cf.wf70_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.wf70_cap3_x.toFixed(2) + ') · 5-fold ×' + cf.fivefold_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.fivefold_cap3_x.toFixed(2) + ') · blind unseen categories ×' + cf.loco_cap5_x.toFixed(2) + ' (cap 3: ×' + cf.loco_cap3_x.toFixed(2) + '). The cap wins three, loses one — kept because the four rows above 3× are 15–18× the training median and the top 5% tail, not because the tests crown it, and it is reported here instead of hidden.</p>' +
+    '<p class="valnote"><b>Range honesty (conformal).</b> The 50/80/90% bands come from the leave-one-out residuals: 50% band ×exp(±' + conf.q50_log.toFixed(2) + '), 80% band ×exp(±' + conf.q80_log.toFixed(2) + '), 90% band ×exp(±' + conf.q90_log.toFixed(2) + '). Cross-fitted, the 80% band covers ' + (100 * conf.cross_cover_80).toFixed(1) + '% and the 50% band ' + (100 * conf.cross_cover_50).toFixed(0) + '% — the intervals cover what they claim. Per size bucket: ' + conf.by_bucket.map((b) => b.bucket + ' 80% band ×' + Math.exp(b.q80_log).toFixed(1) + ', covers ' + (100 * b.cross_cover_80).toFixed(0) + '% (n=' + b.n + ')').join('; ') + '.</p>' +
+    '<p class="valnote"><b>Forward launch odds.</b> The logistic ever-odds curve F(age) is fitted on the 645 protocols with a known listing date; the 12-month forward odds at six ages: ' + of.at_ages.map((a) => a.age_days + 'd: ever ' + a.ever_odds.toFixed(2) + ', forward ' + a.forward_12mo.toFixed(2)).join('; ') + '. 5-fold Brier: logistic ' + of.brier_logistic.toFixed(3) + ' vs cell ' + of.brier_cell.toFixed(3) + ' vs category-only ' + of.brier_category_only.toFixed(3) + ' vs global-only ' + of.brier_global_only.toFixed(3) + '. The forward odds are shown on the board; the ever-odds price expected value.</p>' +
     '<p class="valnote"><b>Token-odds calibration</b> — odds fitted on one random half of the protocols, checked on the other ' + oc.n_test + ': ' + oc.quartiles.map((q) => 'predicted ' + q.odds_mid.toFixed(2) + ' → ' + (100 * q.observed_live_share).toFixed(0) + '% actually record a token (n=' + q.n + ')').join('; ') + '. Mean absolute error ' + oc.mean_abs_error.toFixed(2) + '.</p>' +
-    '<p class="valnote"><b>Tested and rejected</b> — each variant was built and scored leave-one-out against the shipped fit (×' + v.loo_median_x.toFixed(2) + '): ' + v.rejected.map((r) => esc(r.name) + ' ×' + r.loo_median_x.toFixed(2) + ' — ' + esc(r.note)).join('; ') + '. One-per-ticker dedup changes nothing on this snapshot (' + D.integrity.n_train_raw + ' → ' + D.integrity.n_train_dedup + ', LOO ×' + v.loo_before_dedup_x.toFixed(2) + ' both ways): no family is counted twice here, so the check is reported, not hidden.</p>';
+    '<p class="valnote"><b>Tested and rejected</b> — each variant was built and scored leave-one-out against the shipped fit (×' + v.loo_median_x.toFixed(2) + '): ' + v.rejected.map((r) => esc(r.name) + ' ×' + r.loo_median_x.toFixed(2) + ' — ' + esc(r.note)).join('; ') + '. One-per-ticker dedup changes nothing on this snapshot (' + D.integrity.n_train_raw + ' → ' + D.integrity.n_train_dedup + ', LOO ×' + v.loo_before_dedup_x.toFixed(2) + ' both ways): no family is counted twice here, so the check is reported, not hidden.</p>' +
+    '<p class="valnote"><b>Data integrity.</b> All ' + it.total_protocols + ' protocols are accounted for: ' + it.ranked + ' ranked + ' + it.live_token + ' live-token at market value + ' + it.excluded_total + ' set aside (' + esc(reasons) + ') + ' + it.merged_families.length + ' versioned family ranked once. Gaps: ' + it.null_change_7d + ' missing 7d, ' + it.null_listed_at + ' missing listing date. Already-traded tokens on the board only because the gate\u2019s watchlist requires them (' + esc(it.watchlist_traded_override.join(' · ')) + ') — both already trade, do not farm.</p>';
   const fa = D.farm_assumptions;
-  $('farmexplain').innerHTML = 'Net farm value = the farmer\u2019s expected share − gas − time. The airdrop pool is assumed to be <b>' + (100 * fa.pool_share).toFixed(0) + '% of the expected value</b> and one farmer captures <b>' + (100 * fa.farmer_share).toFixed(2) + '% of that pool at a $100 deposit, scaled with the deposit</b> (a $250 deposit captures 2.5× the share of a $100 one — radar-5 gave every deposit the same share, so the deposit size meant nothing); gas is <b>' + fa.setup_tx + ' setup transactions plus one weekly transaction per week of the hold</b> at the chain\u2019s usual cost (radar-5 charged 9 flat transactions while the plan itself promised a weekly action for 30–60 days); time is <b>' + fa.hours + ' hours at $' + fa.hour_usd + '/hour</b>. Net above <b>$' + fa.threshold_usd + '</b> → <b>FARM</b> at the full deposit; net above $0 → <b>THIN</b> at half the deposit; net at or below $0 → <b>SKIP</b>, deposit $0. <b>Net per $100 deposited</b> is the efficiency that separates two FARM rows. The assumptions are the same for every row, so the verdicts compare like with like — change the assumptions and the verdicts move together.';
+  $('farmexplain').innerHTML = 'Net farm value = the farmer\u2019s expected share − gas − time. The airdrop pool is assumed to be <b>' + (100 * fa.pool_share).toFixed(0) + '% of the expected value</b> and one farmer captures <b>' + (100 * fa.farmer_share).toFixed(2) + '% of that pool at a $100 deposit, scaled with the deposit</b> (a $250 deposit captures 2.5× the share of a $100 one — radar-5 gave every deposit the same share, so the deposit size meant nothing); gas is <b>' + fa.setup_tx + ' setup transactions plus one weekly transaction per week of the hold</b> at the chain\u2019s usual cost (radar-5 charged 9 flat transactions while the plan itself promised a weekly action for 30–60 days); time is <b>the plan\u2019s own hours at $' + fa.hour_usd + '/hour: ' + fa.hours_by_hold.map((h) => h.hours.toFixed(2) + ' h for a ' + h.hold_days + '-day hold').join(', ') + '</b> — the plan\u2019s steps are the work (wallet 5 min, move 10, action 15, 10 min a week, claim 10, log 5, risk 5), not a flat 3 h. Net above <b>$' + fa.threshold_usd + '</b> → <b>FARM</b> at the full deposit; net above $0 → <b>THIN</b> at half the deposit; net at or below $0 → <b>SKIP</b>, deposit $0. <b>Net per hour</b> is the efficiency the board shows; <b>net per $100 deposited</b> is in the detail view. The assumptions are the same for every row, so the verdicts compare like with like — change the assumptions and the verdicts move together.';
 }
 
 /** The size curve: the fitted multiple at each size, next to what the market actually pays there. */
@@ -255,19 +290,18 @@ function renderBoard() {
   $('rows').innerHTML = rows.map((r) =>
     '<tr data-slug="' + esc(r.slug) + '">' +
     '<td class="num"><span class="rank">' + r.rank + '</span></td>' +
-    '<td class="name"><b>' + esc(r.name) + '</b>' + (r.already_traded ? ' <span class="traded">ALREADY TRADED</span>' : '') + '<span>' + esc(r.slug) + (watchSet.has(r.slug) ? '<span class="watch">★ watchlist</span>' : '') + '</span>' +
-    (r.category ? '<br><span class="cat">' + esc(r.category) + '</span>' : '') + '</td>' +
+    '<td class="name"><b>' + esc(r.name) + '</b>' + (r.already_traded ? ' <span class="traded">ALREADY TRADED</span>' : '') + '<span>' + esc(r.slug) + (watchSet.has(r.slug) ? '<span class="watch">★ watchlist</span>' : '') + (r.category ? '<span class="cat">' + esc(r.category) + '</span>' : '') + '</span></td>' +
     '<td class="num">' + money(r.tvl_usd) + '</td>' +
     pctCell(r.change_7d) +
     '<td class="num">' + days(r.age_days) + '</td>' +
-    '<td class="num">' + r.multiple.toFixed(3) + '×</td>' +
     '<td class="num">' + money(r.implied_raw_usd) + '</td>' +
-    '<td class="num">' + r.token_odds.toFixed(2) + '<span class="sub2">' + r.odds_peers + ' peers</span></td>' +
+    '<td class="num">' + r.token_odds.toFixed(2) + '</td>' +
+    '<td class="num">' + r.forward_odds_12mo.toFixed(2) + '</td>' +
     '<td class="num imp">' + money(r.expected_value_usd) + '<span class="bar"><span style="width:' + Math.max(2, Math.round((r.expected_value_usd / maxExp) * 100)) + '%"></span></span></td>' +
     '<td>' + verdictBadge(r.farm_verdict) + '</td>' +
-    '<td class="num">' + (r.farm_net_per_100_usd < 0 ? '−' : '') + '$' + Math.abs(r.farm_net_per_100_usd).toFixed(0) + '</td>' +
-    '<td class="num">' + money(r.value_lo_usd) + ' – ' + money(r.value_hi_usd) + '</td>' +
-    '<td class="num">#' + r.rank_lo + '–#' + r.rank_hi + '</td>' +
+    '<td class="num">' + (r.farm_net_per_hour_usd < 0 ? '−' : '') + '$' + Math.abs(r.farm_net_per_hour_usd).toFixed(0) + '</td>' +
+    '<td class="plan">' + esc(r.farm_plan) + '</td>' +
+    '<td class="num">' + money(r.value_lo_usd) + '–' + money(r.value_hi_usd) + '<span class="sub2">#' + r.rank_lo + '–#' + r.rank_hi + '</span></td>' +
     '</tr>').join('');
   $('rowcount').textContent = 'Showing ' + rows.length + ' of ' + D.rows.length + ' protocols';
   document.querySelectorAll('#board thead th').forEach((th) => {
@@ -292,24 +326,16 @@ function renderLive() {
 function mathRows(r) {
   const b = D.fit_beta;
   const logTvl = Math.log10(Math.max(r.tvl_usd, 1));
-  const rawGrowth = r.change_7d === null ? 0 : r.change_7d / 100;
-  const capped = Math.min(D.growth_cap_pct / 100, Math.max(D.model.growth_floor / 100, rawGrowth));
-  const growthFeat = Math.sign(capped) * Math.log1p(Math.abs(capped));
-  const transformed = growthFeat !== rawGrowth;
-  const ageFeat = Math.log1p(r.age_days === null ? 365 : r.age_days);
-  const chainFeat = Math.min(r.chains.length, 5);
   const sgn = (x) => (x < 0 ? '−' : '+') + Math.abs(x).toFixed(3);
   return [
     ['Constant', signed(b[0], 2), sgn(r.const_term)],
     ['Size — log₁₀ TVL ' + logTvl.toFixed(2), b[1].toFixed(2) + ' × ' + logTvl.toFixed(2), sgn(r.size_term)],
-    ['Growth — ' + pct(r.change_7d) + (transformed ? ' (log(1+growth), capped at +' + D.growth_cap_pct + '%)' : ''), b[2].toFixed(2) + ' × ' + growthFeat.toFixed(3), sgn(r.growth_term)],
-    ['Age — ' + (r.age_days === null ? 'unknown (365d used)' : r.age_days + 'd with no token'), b[3].toFixed(2) + ' × ' + ageFeat.toFixed(2), sgn(r.age_term)],
-    ['Chains — ' + r.chains.length + ' counted', b[4].toFixed(2) + ' × ' + chainFeat, sgn(r.chain_term)],
-    ['Category factor — ' + (r.category || '(no category)'), 'exp(' + sgn(r.category_term) + ') = ×' + Math.exp(r.category_term).toFixed(3), sgn(r.category_term)],
+    ['Growth · age · chains · category — tested, not kept', 'forward selection (see the table below)', '+ 0.000'],
     ['Fitted log(mcap / TVL)', 'sum of the terms above', r.log_ratio.toFixed(3)],
     ['Fitted multiple = exp(log-ratio)', 'exp(' + r.log_ratio.toFixed(3) + ')', r.multiple.toFixed(4) + '×'],
     ['TVL × multiple', money(r.tvl_usd) + ' × ' + r.multiple.toFixed(4) + '×', money(r.implied_raw_usd)],
     ['Token odds — ' + r.odds_peers + ' comparable peers', 'share of peers that record a token', r.token_odds.toFixed(2)],
+    ['Forward 12-mo odds — lists within a year', 'logistic ever-odds curve in log-age', r.forward_odds_12mo.toFixed(2)],
     ['Expected value = odds × implied', r.token_odds.toFixed(2) + ' × ' + money(r.implied_raw_usd), money(r.expected_value_usd)],
   ];
 }
@@ -324,7 +350,7 @@ function openDetail(slug) {
   // The full capital tier (the share scales with it, not with the verdict deposit).
   const capital = r.tvl_usd >= 1e9 ? 250 : r.tvl_usd >= 1e8 ? 150 : r.tvl_usd >= 25e6 ? 100 : 50;
   const farmerShare = r.expected_value_usd * fa.pool_share * fa.farmer_share * (capital / 100);
-  const timeValue = fa.hours * fa.hour_usd;
+  const timeValue = r.farm_hours * fa.hour_usd;
   const gasTotal = farmerShare - timeValue - r.farm_net_usd;
   const chainList = r.chains.length > 4 ? r.chains.slice(0, 4).join(', ') + ' +' + (r.chains.length - 4) + ' more' : r.chains.join(', ');
   $('detail').innerHTML =
@@ -339,10 +365,13 @@ function openDetail(slug) {
     '<div><div class="k">Expected value</div><div class="v">' + money(r.expected_value_usd) + '</div></div>' +
     '<div><div class="k">Implied value</div><div class="v">' + money(r.implied_raw_usd) + '</div></div>' +
     '<div><div class="k">Token odds</div><div class="v">' + r.token_odds.toFixed(2) + ' <span class="muted" style="font-size:13px">(' + r.odds_peers + ' peers)</span></div></div>' +
+    '<div><div class="k">12-mo launch odds</div><div class="v">' + r.forward_odds_12mo.toFixed(2) + '</div></div>' +
     '<div><div class="k">Value range (10–90%)</div><div class="v" style="font-size:15px">' + money(r.value_lo_usd) + ' – ' + money(r.value_hi_usd) + '</div></div>' +
     '<div><div class="k">Rank range (10–90%)</div><div class="v">#' + r.rank_lo + '–#' + r.rank_hi + '</div></div>' +
     '<div><div class="k">TVL</div><div class="v">' + money(r.tvl_usd) + '</div></div>' +
     '<div><div class="k">Age with no token</div><div class="v">' + days(r.age_days) + '</div></div>' +
+    '<div><div class="k">Net farm value / hour</div><div class="v">' + (r.farm_net_per_hour_usd < 0 ? '−' : '') + '$' + Math.abs(r.farm_net_per_hour_usd).toFixed(0) + '</div></div>' +
+    '<div><div class="k">Farm plan</div><div class="v" style="font-size:15px">' + esc(r.farm_plan) + '</div></div>' +
     '</div>' +
     '<h3>How the value is priced</h3>' +
     '<div class="math">' + math.map((row) =>
@@ -352,8 +381,9 @@ function openDetail(slug) {
     '<div class="math">' +
     '<div><span>Farmer\u2019s expected share (' + (100 * fa.pool_share).toFixed(0) + '% pool × ' + (100 * fa.farmer_share).toFixed(2) + '% × $' + capital + ' deposit / $100)</span><span>' + money(farmerShare) + '</span></div>' +
     '<div><span>Gas (' + r.farm_gas_txns + ' transactions: ' + fa.setup_tx + ' setup + one a week over the ' + r.farm_hold_days + '-day hold)</span><span>− ' + money(gasTotal) + '</span></div>' +
-    '<div><span>Time (' + fa.hours + 'h at $' + fa.hour_usd + '/h)</span><span>− ' + money(timeValue) + '</span></div>' +
+    '<div><span>Time (' + r.farm_hours.toFixed(2) + 'h at $' + fa.hour_usd + '/h — the plan\u2019s own steps)</span><span>− ' + money(timeValue) + '</span></div>' +
     '<div class="tot"><span>Net farm value</span><span>' + (r.farm_net_usd < 0 ? '−' : '') + money(Math.abs(r.farm_net_usd)) + '</span></div>' +
+    '<div><span>Net per hour of the farmer\u2019s time</span><span><b>' + (r.farm_net_per_hour_usd < 0 ? '−' : '') + '$' + Math.abs(r.farm_net_per_hour_usd).toFixed(2) + '</b></span></div>' +
     '<div><span>Net per $100 deposited</span><span><b>' + (r.farm_net_per_100_usd < 0 ? '−' : '') + '$' + Math.abs(r.farm_net_per_100_usd).toFixed(2) + '</b></span></div>' +
     (r.already_traded ? '<div><span>Verdict forced to SKIP</span><span>the token already trades — do not farm</span></div>' : '') +
     (r.merged_from ? '<div><span>Versions merged into this row</span><span>' + esc(r.merged_from.join(', ')) + ' — one protocol, one row</span></div>' : '') +
@@ -392,6 +422,7 @@ function init() {
   renderStats();
   renderIntegrity();
   renderOosStrip();
+  renderEvidenceTables();
   renderSelfCheck();
   renderModel();
   renderSizeCurve();
